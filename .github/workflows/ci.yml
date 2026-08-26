@@ -62,6 +62,9 @@ jobs:
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@v2
 
+      - name: Prepare desktop frontend
+        run: npm run desktop:prepare
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

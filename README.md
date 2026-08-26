@@ -174,7 +174,8 @@ npm run desktop:dev
 # TypeScript Adapter 与 Web 测试
 npm run check
 
-# Rust workspace
+# 生成被 Git 忽略的 Tauri frontendDist，再验证 Rust workspace
+npm run desktop:prepare
 cargo test --workspace --offline
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo fmt --all -- --check

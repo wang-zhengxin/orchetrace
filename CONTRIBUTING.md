@@ -14,6 +14,7 @@ Run the standard checks before opening a pull request:
 
 ```bash
 npm run check
+npm run desktop:prepare
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
