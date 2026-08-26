@@ -1,0 +1,34 @@
+# Local design and implementation notes are intentionally not published.
+/docs/
+/AGENTS.md
+/.agents/
+/.codex/
+
+# Rust / Node build output
+/target/
+/node_modules/
+/apps/desktop/dist/
+/apps/desktop/src-tauri/gen/
+/coverage/
+
+# Local runtime state and secrets
+/.orchetrace/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.cursor.json
+*.live.json
+*.log
+
+# Generated live projection data; committed replay fixtures remain available.
+/apps/web/public/data/live-config.json
+/apps/web/public/data/deltas/
+
+# Editor / operating-system metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp

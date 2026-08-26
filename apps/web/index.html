@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Orchetrace — local multi-agent observability across Claude, Pi, and DeepSeek Harness."
+    />
+    <title>Orchetrace · Agent Run</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="app" aria-busy="true">
+      <header class="command-bar" data-tauri-drag-region>
+        <a class="brand" href="/" aria-label="Orchetrace home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="brand-name">ORCHETRACE</span>
+          <span class="brand-channel" id="brand-channel">/ LOCAL</span>
+        </a>
+
+        <div class="run-identity">
+          <span class="eyebrow">ACTIVE RUN</span>
+          <strong id="active-run-name">Loading run catalog…</strong>
+        </div>
+
+        <div class="mode-switch" role="group" aria-label="Run mode">
+          <button class="mode-button active" type="button" data-mode="replay">REPLAY</button>
+          <button class="mode-button" type="button" data-mode="live">
+            <span class="live-dot" aria-hidden="true"></span>LIVE
+          </button>
+        </div>
+
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <span class="sr-only">Search agents and tools</span>
+          <input id="search" type="search" placeholder="Search agent or tool" autocomplete="off" />
+          <kbd>⌘ K</kbd>
+        </label>
+
+        <button
+          class="connection-health replay"
+          id="connection-health"
+          type="button"
+          title="Open runtime diagnostics"
+          aria-controls="runtime-drawer"
+          aria-expanded="false"
+        >
+          <span class="health-signal" aria-hidden="true"></span>
+          <span><small>SNAPSHOT</small><strong id="health-label">REPLAY</strong></span>
+        </button>
+      </header>
+
+      <aside class="run-rail" aria-label="Runs">
+        <div class="rail-heading">
+          <span class="eyebrow">RUNS</span>
+          <button class="icon-button" type="button" aria-label="Add source">+</button>
+        </div>
+        <div class="run-list" id="run-list" aria-live="polite">
+          <p class="run-list-loading">Reading local run index…</p>
+        </div>
+        <div class="rail-section">
+          <span class="eyebrow">SOURCES</span>
+          <div class="source-row" id="source-dsh"><span class="source-glyph">DS</span><span>Harness</span><b id="source-count-dsh">0</b></div>
+          <div class="source-row muted" id="source-claude"><span class="source-glyph">CC</span><span>Claude Code</span><b id="source-count-claude">0</b></div>
+          <div class="source-row muted" id="source-pi"><span class="source-glyph">π</span><span>Pi</span><b id="source-count-pi">0</b></div>
+        </div>
+        <div class="rail-footer">
+          <div><span>INDEX</span><strong id="index-state">LOCAL ONLY</strong></div>
+          <div><span>REDACTION</span><strong>ON</strong></div>
+        </div>
+      </aside>
+
+      <main class="graph-panel">
+        <div class="panel-toolbar">
+          <div>
+            <span class="eyebrow">AGENT TOPOLOGY</span>
+            <span class="toolbar-detail" id="graph-summary">Loading run snapshot…</span>
+          </div>
+          <div class="graph-controls" role="group" aria-label="Graph controls">
+            <label class="status-filter">
+              <span class="sr-only">Filter by status</span>
+              <select id="status-filter">
+                <option value="all">ALL STATES</option>
+                <option value="running">RUNNING</option>
+                <option value="ready">READY</option>
+                <option value="idle">IDLE</option>
+                <option value="failed">FAILED</option>
+                <option value="succeeded">SUCCEEDED</option>
+              </select>
+            </label>
+            <button class="tool-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <output class="zoom-value" id="zoom-value">100%</output>
+            <button class="tool-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+            <button class="tool-button fit-button" id="fit-graph" type="button">FIT</button>
+          </div>
+        </div>
+        <div class="graph-viewport" id="graph-viewport" tabindex="0" aria-label="Agent topology graph">
+          <div class="graph-spacer" id="graph-spacer">
+            <div class="graph-stage" id="graph-stage">
+              <svg class="edge-layer" id="edge-layer" aria-hidden="true"></svg>
+              <div class="node-layer" id="node-layer"></div>
+            </div>
+          </div>
+          <div class="graph-legend" aria-label="Status legend">
+            <span><i class="status-symbol running">●</i> running</span>
+            <span><i class="status-symbol ready">◆</i> ready</span>
+            <span><i class="status-symbol succeeded">✓</i> done</span>
+            <span><i class="status-symbol failed">✕</i> failed</span>
+          </div>
+        </div>
+      </main>
+
+      <aside class="inspector" aria-label="Inspector">
+        <div class="inspector-empty" id="inspector-empty">
+          <span class="empty-reticle" aria-hidden="true"></span>
+          <strong>SELECT AN AGENT</strong>
+          <p>Inspect status evidence, tools, activations, and lineage.</p>
+        </div>
+        <div id="inspector-content" hidden></div>
+      </aside>
+
+      <section class="timeline-panel" aria-label="Run timeline">
+        <div class="timeline-heading">
+          <div>
+            <span class="eyebrow">EXECUTION TIMELINE</span>
+            <strong id="timeline-range">—</strong>
+          </div>
+          <div class="timeline-key">
+            <span><i class="key-block activation"></i>ACTIVATION</span>
+            <span><i class="key-block tool"></i>TOOL</span>
+            <span><i class="key-block failed"></i>FAILURE</span>
+          </div>
+        </div>
+        <div class="timeline-scroll" id="timeline-scroll">
+          <div class="timeline-ruler" id="timeline-ruler"></div>
+          <div class="timeline-lanes" id="timeline-lanes"></div>
+        </div>
+      </section>
+    </div>
+
+    <button class="drawer-scrim" id="drawer-scrim" type="button" hidden aria-label="Close runtime diagnostics"></button>
+    <aside class="runtime-drawer" id="runtime-drawer" hidden aria-labelledby="runtime-title">
+      <header class="runtime-header">
+        <div>
+          <span class="eyebrow">LOCAL CONTROL PLANE</span>
+          <h2 id="runtime-title">Runtime diagnostics</h2>
+        </div>
+        <button class="runtime-close" id="runtime-close" type="button" aria-label="Close diagnostics">×</button>
+      </header>
+
+      <section class="runtime-process">
+        <div class="runtime-phase-line">
+          <span class="runtime-phase stopped" id="runtime-phase"><i></i><b>STOPPED</b></span>
+          <button class="runtime-action" id="managed-ingest-action" type="button">START INGEST</button>
+        </div>
+        <p id="runtime-summary">Open the desktop shell to manage the local ingest service.</p>
+        <p class="runtime-error" id="runtime-error" hidden></p>
+      </section>
+
+      <dl class="runtime-facts">
+        <div><dt>INGEST</dt><dd id="runtime-ingest-endpoint">—</dd></div>
+        <div><dt>LIVE</dt><dd id="runtime-live-endpoint">—</dd></div>
+        <div><dt>PROCESS</dt><dd id="runtime-pid">—</dd></div>
+        <div><dt>DATA</dt><dd id="runtime-data-dir">—</dd></div>
+      </dl>
+
+      <section class="runtime-token">
+        <div>
+          <span class="eyebrow">ADAPTER TOKEN</span>
+          <code id="runtime-token-value">NOT ISSUED</code>
+        </div>
+        <button id="runtime-token-copy" type="button" disabled>COPY</button>
+      </section>
+
+      <section class="runtime-sources">
+        <div class="runtime-section-heading">
+          <span class="eyebrow">OBSERVED SOURCES</span>
+          <small>CATALOG</small>
+        </div>
+        <div class="runtime-source-grid">
+          <div><span class="source-glyph">DS</span><strong>Harness</strong><b id="runtime-source-dsh">0</b></div>
+          <div><span class="source-glyph">CC</span><strong>Claude Code</strong><b id="runtime-source-claude">0</b></div>
+          <div><span class="source-glyph">π</span><strong>Pi</strong><b id="runtime-source-pi">0</b></div>
+        </div>
+      </section>
+
+      <section class="runtime-logs">
+        <div class="runtime-section-heading">
+          <span class="eyebrow">PROCESS LOG</span>
+          <small>LAST 160</small>
+        </div>
+        <ol id="runtime-log-list"><li class="runtime-log-empty">No managed process activity.</li></ol>
+      </section>
+    </aside>
+
+    <div class="fatal-state" id="fatal-state" hidden role="alert">
+      <strong>SNAPSHOT UNAVAILABLE</strong>
+      <p id="fatal-message"></p>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

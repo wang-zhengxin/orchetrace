@@ -1,0 +1,437 @@
+{
+  "schema_version": 1,
+  "root_session_id": "run-root",
+  "runtimes": [
+    "deepseek-harness"
+  ],
+  "event_count": 46,
+  "started_at": "2026-08-25T02:00:00.000Z",
+  "last_activity_at": "2026-08-25T02:00:09.300Z",
+  "agents": [
+    {
+      "id": "run-root",
+      "parent_id": null,
+      "label": "orchestrator",
+      "role": "lead",
+      "mode": "root",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4",
+      "detail_level": "full",
+      "status": "idle",
+      "outcome": null,
+      "outcome_evidence": null,
+      "current_tool": null,
+      "tool_count": 2,
+      "failed_tool_count": 1,
+      "started_at": "2026-08-25T02:00:00.000Z",
+      "last_activity_at": "2026-08-25T02:00:09.300Z",
+      "activations": [
+        {
+          "id": "root-a1",
+          "started_at": "2026-08-25T02:00:00.100Z",
+          "ended_at": "2026-08-25T02:00:09.250Z",
+          "end_status": "idle"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "delegate-build",
+          "name": "delegate_task",
+          "started_at": "2026-08-25T02:00:05.400Z",
+          "ended_at": "2026-08-25T02:00:08.500Z",
+          "outcome": "failed",
+          "duration_ms": 3100,
+          "input_summary": "Implement the first protocol slice and run its tests",
+          "output_summary": "Implementation needs a status/outcome correction."
+        },
+        {
+          "call_id": "delegate-research",
+          "name": "delegate_task",
+          "started_at": "2026-08-25T02:00:01.000Z",
+          "ended_at": "2026-08-25T02:00:05.200Z",
+          "outcome": "succeeded",
+          "duration_ms": 4200,
+          "input_summary": "Map runtime event semantics and identify compatibility risks",
+          "output_summary": "Runtime compatibility map completed."
+        }
+      ]
+    },
+    {
+      "id": "agent-research",
+      "parent_id": "run-root",
+      "label": "runtime researcher",
+      "role": "researcher",
+      "mode": "continuable",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4",
+      "detail_level": "full",
+      "status": "ready",
+      "outcome": "succeeded",
+      "outcome_evidence": "continuable activation returned an explicit report",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:01.200Z",
+      "last_activity_at": "2026-08-25T02:00:05.050Z",
+      "activations": [
+        {
+          "id": "research-a1",
+          "started_at": "2026-08-25T02:00:01.250Z",
+          "ended_at": "2026-08-25T02:00:05.050Z",
+          "end_status": "ready"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "delegate-docs",
+          "name": "delegate_task",
+          "started_at": "2026-08-25T02:00:01.800Z",
+          "ended_at": "2026-08-25T02:00:04.200Z",
+          "outcome": "succeeded",
+          "duration_ms": 2400,
+          "input_summary": "Inspect the official persistence and session event contracts",
+          "output_summary": "Protocol contracts confirmed."
+        }
+      ]
+    },
+    {
+      "id": "agent-builder",
+      "parent_id": "run-root",
+      "label": "core builder",
+      "role": "implementer",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "failed",
+      "outcome_evidence": "one-shot result resolved with stopReason=error",
+      "current_tool": null,
+      "tool_count": 2,
+      "failed_tool_count": 1,
+      "started_at": "2026-08-25T02:00:05.600Z",
+      "last_activity_at": "2026-08-25T02:00:08.350Z",
+      "activations": [
+        {
+          "id": "build-a1",
+          "started_at": "2026-08-25T02:00:05.650Z",
+          "ended_at": "2026-08-25T02:00:08.350Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "edit-core",
+          "name": "str_replace_editor",
+          "started_at": "2026-08-25T02:00:06.000Z",
+          "ended_at": "2026-08-25T02:00:06.900Z",
+          "outcome": "succeeded",
+          "duration_ms": 900,
+          "input_summary": "crates/core/src/lib.rs",
+          "output_summary": "Core fold implemented."
+        },
+        {
+          "call_id": "test-core",
+          "name": "bash",
+          "started_at": "2026-08-25T02:00:07.100Z",
+          "ended_at": "2026-08-25T02:00:08.200Z",
+          "outcome": "failed",
+          "duration_ms": 1100,
+          "input_summary": "cargo test --workspace",
+          "output_summary": "1 test failed: continuable agent was incorrectly marked done."
+        }
+      ]
+    },
+    {
+      "id": "agent-docs",
+      "parent_id": "agent-research",
+      "label": "protocol scout",
+      "role": "scout",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot result resolved with stopReason=stop",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:02.000Z",
+      "last_activity_at": "2026-08-25T02:00:04.050Z",
+      "activations": [
+        {
+          "id": "docs-a1",
+          "started_at": "2026-08-25T02:00:02.050Z",
+          "ended_at": "2026-08-25T02:00:04.050Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "search-docs",
+          "name": "web_search",
+          "started_at": "2026-08-25T02:00:02.300Z",
+          "ended_at": "2026-08-25T02:00:03.500Z",
+          "outcome": "succeeded",
+          "duration_ms": 1200,
+          "input_summary": "DeepSeek Harness SessionEvent persistence readFrom",
+          "output_summary": "Append-only events use seq and time; persistence exposes inspect and readFrom."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "parent_id": "agent-research",
+      "child_id": "agent-docs",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "run-root",
+      "child_id": "agent-builder",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "run-root",
+      "child_id": "agent-research",
+      "relation": "delegate",
+      "opaque": false
+    }
+  ],
+  "timeline": [
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:00.100Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:00.200Z",
+      "kind": "prompt",
+      "label": "Audit the repository architecture, verify the event protocol, and prepare a safe implementation plan.",
+      "outcome": null
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:00.300Z",
+      "kind": "turn",
+      "label": "turn started",
+      "outcome": null
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:01.000Z",
+      "kind": "tool",
+      "label": "delegate_task",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:01.200Z",
+      "kind": "spawn",
+      "label": "runtime researcher",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:01.250Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:01.300Z",
+      "kind": "prompt",
+      "label": "Map DeepSeek Harness session, tool, and subagent event semantics.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:01.350Z",
+      "kind": "turn",
+      "label": "turn started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:01.800Z",
+      "kind": "tool",
+      "label": "delegate_task",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:02.000Z",
+      "kind": "spawn",
+      "label": "protocol scout",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:02.050Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:02.100Z",
+      "kind": "prompt",
+      "label": "Inspect the official persistence and session event contracts.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:02.300Z",
+      "kind": "tool",
+      "label": "web_search",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:03.500Z",
+      "kind": "tool-result",
+      "label": "web_search",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:03.900Z",
+      "kind": "message",
+      "label": "Confirmed durable parentSession lineage and lossless tool call/result pairing.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-docs",
+      "at": "2026-08-25T02:00:04.000Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:04.200Z",
+      "kind": "tool-result",
+      "label": "delegate_task",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:04.800Z",
+      "kind": "message",
+      "label": "Runtime mapping is viable; separate activity status from terminal outcome.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-research",
+      "at": "2026-08-25T02:00:05.000Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:05.200Z",
+      "kind": "tool-result",
+      "label": "delegate_task",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:05.400Z",
+      "kind": "tool",
+      "label": "delegate_task",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:05.600Z",
+      "kind": "spawn",
+      "label": "core builder",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:05.650Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:05.700Z",
+      "kind": "prompt",
+      "label": "Implement the first protocol slice and run its tests.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:06.000Z",
+      "kind": "tool",
+      "label": "str_replace_editor",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:06.900Z",
+      "kind": "tool-result",
+      "label": "str_replace_editor",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:07.100Z",
+      "kind": "tool",
+      "label": "bash",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:08.200Z",
+      "kind": "tool-result",
+      "label": "bash",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:08.250Z",
+      "kind": "error",
+      "label": "continuable agent was incorrectly marked done",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "agent-builder",
+      "at": "2026-08-25T02:00:08.300Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:08.500Z",
+      "kind": "tool-result",
+      "label": "delegate_task",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:09.000Z",
+      "kind": "message",
+      "label": "The architecture is viable. One status mapping needs correction before merge.",
+      "outcome": null
+    },
+    {
+      "session_id": "run-root",
+      "at": "2026-08-25T02:00:09.200Z",
+      "kind": "turn",
+      "label": "turn ended",
+      "outcome": null
+    }
+  ]
+}

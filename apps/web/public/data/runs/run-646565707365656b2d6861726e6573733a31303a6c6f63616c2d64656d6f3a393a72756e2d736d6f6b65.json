@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "root_session_id": "run-smoke",
+  "runtimes": [
+    "deepseek-harness"
+  ],
+  "event_count": 8,
+  "started_at": "2026-08-25T02:04:00.000Z",
+  "last_activity_at": "2026-08-25T02:04:02.550Z",
+  "agents": [
+    {
+      "id": "run-smoke",
+      "parent_id": null,
+      "label": "release smoke",
+      "role": "qa",
+      "mode": "root",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "release smoke command exited with code 0",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:04:00.000Z",
+      "last_activity_at": "2026-08-25T02:04:02.550Z",
+      "activations": [
+        {
+          "id": "smoke-a1",
+          "started_at": "2026-08-25T02:04:00.100Z",
+          "ended_at": "2026-08-25T02:04:02.550Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "smoke-tests",
+          "name": "bash",
+          "started_at": "2026-08-25T02:04:00.500Z",
+          "ended_at": "2026-08-25T02:04:02.400Z",
+          "outcome": "succeeded",
+          "duration_ms": 1900,
+          "input_summary": "cargo test --workspace",
+          "output_summary": "All checks passed."
+        }
+      ]
+    }
+  ],
+  "edges": [],
+  "timeline": [
+    {
+      "session_id": "run-smoke",
+      "at": "2026-08-25T02:04:00.100Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "run-smoke",
+      "at": "2026-08-25T02:04:00.180Z",
+      "kind": "prompt",
+      "label": "Run the release smoke suite and report only verified failures.",
+      "outcome": null
+    },
+    {
+      "session_id": "run-smoke",
+      "at": "2026-08-25T02:04:00.500Z",
+      "kind": "tool",
+      "label": "bash",
+      "outcome": null
+    },
+    {
+      "session_id": "run-smoke",
+      "at": "2026-08-25T02:04:02.400Z",
+      "kind": "tool-result",
+      "label": "bash",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "run-smoke",
+      "at": "2026-08-25T02:04:02.500Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchetrace.dev/schemas/canonical-event-v1.json",
+  "title": "Orchetrace Canonical Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "runtime",
+    "source_id",
+    "session_id",
+    "source_seq",
+    "observed_at",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "runtime": {
+      "enum": ["claude-code", "pi", "deepseek-harness"]
+    },
+    "source_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "parent_session_id": { "type": "string", "minLength": 1 },
+    "source_seq": { "type": "integer", "minimum": 0 },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "session.discovered",
+        "session.metadata_changed",
+        "agent.spawned",
+        "agent.activation_started",
+        "agent.status_changed",
+        "agent.activation_ended",
+        "agent.outcome_recorded",
+        "agent.disposed",
+        "prompt.accepted",
+        "turn.started",
+        "turn.ended",
+        "step.started",
+        "step.ended",
+        "assistant.message",
+        "assistant.reasoning_summary",
+        "tool.started",
+        "tool.progressed",
+        "tool.finished",
+        "context.compacted",
+        "error.recorded"
+      ]
+    },
+    "data": { "type": "object" },
+    "attributes": { "type": "object" },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "location"],
+      "properties": {
+        "kind": { "type": "string" },
+        "location": { "type": "string" }
+      }
+    },
+    "supersedes_event_id": { "type": "string" },
+    "ignorable": { "type": "boolean" }
+  }
+}

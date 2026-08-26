@@ -1,0 +1,17 @@
+{
+  "name": "@orchetrace/pi-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "bin": {
+    "orchetrace-pi": "./src/cli.ts",
+    "orchetrace-pi-live": "./src/live-cli.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "fixture": "node src/generate-fixture.ts",
+    "map": "node src/cli.ts",
+    "live": "node src/live-cli.ts"
+  }
+}

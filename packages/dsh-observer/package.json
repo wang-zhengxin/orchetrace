@@ -1,0 +1,14 @@
+{
+  "name": "@orchetrace/dsh-observer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.1.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "fixture": "node src/generate-fixture.ts"
+  }
+}

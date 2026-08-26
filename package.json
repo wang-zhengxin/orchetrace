@@ -1,0 +1,30 @@
+{
+  "name": "orchetrace-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "fixture:dsh": "node packages/dsh-observer/src/generate-fixture.ts",
+    "fixture:demo": "node packages/dsh-observer/src/generate-demo.ts",
+    "fixture:claude": "node packages/claude-adapter/src/generate-fixture.ts",
+    "fixture:pi": "node packages/pi-adapter/src/generate-fixture.ts",
+    "claude:map": "node packages/claude-adapter/src/cli.ts",
+    "claude:live": "node packages/claude-adapter/src/live-cli.ts",
+    "pi:map": "node packages/pi-adapter/src/cli.ts",
+    "pi:live": "node packages/pi-adapter/src/live-cli.ts",
+    "test:adapter": "node --test packages/dsh-observer/test/*.test.ts",
+    "test:claude": "node --test packages/claude-adapter/test/*.test.ts",
+    "test:pi": "node --test packages/pi-adapter/test/*.test.ts",
+    "test:pi-extension": "node --test packages/pi-telemetry-extension/test/*.test.ts",
+    "test:web": "node --test apps/web/*.test.js",
+    "desktop:prepare": "node scripts/build-desktop.mjs",
+    "desktop:dev": "node scripts/run-desktop.mjs run",
+    "desktop:check": "node scripts/run-desktop.mjs check",
+    "dev:web": "node scripts/dev-server.mjs",
+    "check": "npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:pi-extension && npm run test:web"
+  }
+}

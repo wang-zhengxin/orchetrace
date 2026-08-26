@@ -1,0 +1,23 @@
+[package]
+name = "orchetrace-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "otrace"
+path = "src/main.rs"
+
+[[bin]]
+name = "otrace-bench"
+path = "src/bin/otrace-bench.rs"
+
+[dependencies]
+orchetrace-protocol.workspace = true
+orchetrace-core.workspace = true
+orchetrace-ingest.workspace = true
+orchetrace-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
