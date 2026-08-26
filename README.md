@@ -1,5 +1,8 @@
 # Orchetrace
 
+[![CI](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml/badge.svg)](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 Claude Code、Pi 和 DeepSeek Harness 的会话、父子 Agent 拓扑、工具调用、状态证据与执行时间线。
 
 它不是 Agent 编排器，也不替代各运行时自己的交互界面。Orchetrace 只观察运行时已经产生的事实，并将它们转换为一致、可回放的诊断视图。
@@ -49,7 +52,7 @@ flowchart LR
 - Rust 1.88 或更新版本；
 - Node.js 22 或更新版本；
 - macOS、Linux 或 Windows；
-- 启动桌面壳时需要本机已安装 Tauri 2 对应的系统依赖。
+- 启动桌面壳时需要本机已安装 [Tauri 2 对应的系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
 仓库中的 TypeScript 直接使用 Node.js type stripping 运行，不需要额外 bundler。
 
@@ -215,3 +218,5 @@ scripts/                      开发、smoke 和性能脚本
 ## License
 
 [MIT](LICENSE)
+
+贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要在公开 Issue 中附带 transcript、数据库或 token。
