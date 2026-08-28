@@ -47,6 +47,50 @@ export function stopManagedIngest(options = {}) {
   return invokeDesktop("stop_managed_ingest", options);
 }
 
+export function readClaudeIntegrationStatus(options = {}) {
+  return invokeDesktop("claude_integration_status", options);
+}
+
+export function startClaudeAuto(options = {}) {
+  return invokeDesktop("start_claude_auto", options);
+}
+
+export function stopClaudeAuto(options = {}) {
+  return invokeDesktop("stop_claude_auto", options);
+}
+
+export function enableClaudeHooks(options = {}) {
+  return invokeDesktop("enable_claude_hooks", options);
+}
+
+export function disableClaudeHooks(options = {}) {
+  return invokeDesktop("disable_claude_hooks", options);
+}
+
+export function readPiIntegrationStatus(options = {}) {
+  return invokeDesktop("pi_integration_status", options);
+}
+
+export function startPiAuto(options = {}) {
+  return invokeDesktop("start_pi_auto", options);
+}
+
+export function stopPiAuto(options = {}) {
+  return invokeDesktop("stop_pi_auto", options);
+}
+
+export function readHarnessIntegrationStatus(options = {}) {
+  return invokeDesktop("harness_integration_status", options);
+}
+
+export function startHarnessAuto(options = {}) {
+  return invokeDesktop("start_harness_auto", options);
+}
+
+export function stopHarnessAuto(options = {}) {
+  return invokeDesktop("stop_harness_auto", options);
+}
+
 function invokeDesktop(command, options) {
   const invoke = options.invoke === undefined ? globalInvoke() : options.invoke;
   if (!invoke) return Promise.resolve(null);

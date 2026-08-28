@@ -6,12 +6,16 @@
   "exports": "./src/index.ts",
   "bin": {
     "orchetrace-claude": "./src/cli.ts",
-    "orchetrace-claude-live": "./src/live-cli.ts"
+    "orchetrace-claude-live": "./src/live-cli.ts",
+    "orchetrace-claude-auto": "./src/auto-cli.ts",
+    "orchetrace-claude-hook": "./src/hook-cli.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "fixture": "node src/generate-fixture.ts",
     "map": "node src/cli.ts",
-    "live": "node src/live-cli.ts"
+    "live": "node src/live-cli.ts",
+    "auto": "node src/auto-cli.ts",
+    "hook": "node src/hook-cli.ts"
   }
 }

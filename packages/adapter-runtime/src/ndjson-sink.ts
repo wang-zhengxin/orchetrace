@@ -157,6 +157,8 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
       this.reconnectTimer = undefined;
       this.connect();
     }, delay);
-    this.reconnectTimer.unref();
+    // This timer intentionally stays referenced. Adapter CLIs may have only
+    // unref'ed discovery timers, so an initial desktop startup race must not
+    // let Node exit before the Rust ingest socket becomes ready.
   }
 }

@@ -6,12 +6,14 @@
   "exports": "./src/index.ts",
   "bin": {
     "orchetrace-pi": "./src/cli.ts",
-    "orchetrace-pi-live": "./src/live-cli.ts"
+    "orchetrace-pi-live": "./src/live-cli.ts",
+    "orchetrace-pi-auto": "./src/auto-cli.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "fixture": "node src/generate-fixture.ts",
     "map": "node src/cli.ts",
-    "live": "node src/live-cli.ts"
+    "live": "node src/live-cli.ts",
+    "auto": "node src/auto-cli.ts"
   }
 }

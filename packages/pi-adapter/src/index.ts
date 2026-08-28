@@ -2,6 +2,8 @@ export { loadPiSession, parsePiSession } from "./loader.ts";
 export { mapPiSession } from "./mapper.ts";
 export { PiRpcMapper } from "./rpc-mapper.ts";
 export { PiLiveBridge } from "./live-bridge.ts";
+export { PiPassiveObserver } from "./passive-observer.ts";
+export { PiAutoDiscovery, discoverPiTranscripts } from "./auto-discovery.ts";
 export {
   mapPiTelemetryEntry,
   parsePiTelemetry,
@@ -24,4 +26,10 @@ export type {
   PiRpcProcess,
   PiRpcProcessFactory,
 } from "./live-bridge.ts";
+export type { PiPassiveObserverOptions, PiPassiveScanResult } from "./passive-observer.ts";
+export type {
+  PiAutoDiscoveryOptions,
+  PiAutoDiscoveryStatus,
+  PiTranscriptCandidate,
+} from "./auto-discovery.ts";
 export type { PiTelemetryEnvelope, PiTelemetryParseResult } from "./telemetry.ts";

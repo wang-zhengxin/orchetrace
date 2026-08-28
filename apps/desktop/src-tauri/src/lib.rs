@@ -7,15 +7,22 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::Manager;
 
+mod claude;
 mod ingest;
+mod runtime_observer;
 
+use claude::{ClaudeConfig, ClaudeIntegrationStatus, ManagedClaude};
 use ingest::{IngestConfig, IngestStatus, ManagedIngest};
+use runtime_observer::{ManagedRuntimeObserver, RuntimeObserverConfig, RuntimeObserverStatus};
 
 #[derive(Debug)]
 struct DesktopState {
     data_dir: PathBuf,
     legacy_snapshot: PathBuf,
     ingest: ManagedIngest,
+    claude: ManagedClaude,
+    pi: ManagedRuntimeObserver,
+    harness: ManagedRuntimeObserver,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,12 +80,109 @@ fn managed_ingest_status(state: tauri::State<'_, DesktopState>) -> Result<Ingest
 
 #[tauri::command]
 fn start_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
-    state.ingest.start()
+    let status = state.ingest.start()?;
+    if let Some(token) = status.connection_token.as_deref() {
+        let _ = state.claude.start(token);
+        let _ = state.pi.start(token);
+        let _ = state.harness.start(token);
+    }
+    Ok(status)
 }
 
 #[tauri::command]
 fn stop_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
+    let _ = state.harness.stop();
+    let _ = state.pi.stop();
+    let _ = state.claude.stop();
     state.ingest.stop()
+}
+
+#[tauri::command]
+fn claude_integration_status(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<ClaudeIntegrationStatus, String> {
+    state.claude.status()
+}
+
+#[tauri::command]
+fn start_claude_auto(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<ClaudeIntegrationStatus, String> {
+    let ingest = state.ingest.status()?;
+    let token = ingest
+        .connection_token
+        .as_deref()
+        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
+    state.claude.start(token)
+}
+
+#[tauri::command]
+fn stop_claude_auto(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<ClaudeIntegrationStatus, String> {
+    state.claude.stop()
+}
+
+#[tauri::command]
+fn enable_claude_hooks(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<ClaudeIntegrationStatus, String> {
+    state.claude.enable_hooks()
+}
+
+#[tauri::command]
+fn disable_claude_hooks(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<ClaudeIntegrationStatus, String> {
+    state.claude.disable_hooks()
+}
+
+#[tauri::command]
+fn pi_integration_status(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    state.pi.status()
+}
+
+#[tauri::command]
+fn start_pi_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
+    let ingest = state.ingest.status()?;
+    let token = ingest
+        .connection_token
+        .as_deref()
+        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
+    state.pi.start(token)
+}
+
+#[tauri::command]
+fn stop_pi_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
+    state.pi.stop()
+}
+
+#[tauri::command]
+fn harness_integration_status(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    state.harness.status()
+}
+
+#[tauri::command]
+fn start_harness_auto(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    let ingest = state.ingest.status()?;
+    let token = ingest
+        .connection_token
+        .as_deref()
+        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
+    state.harness.start(token)
+}
+
+#[tauri::command]
+fn stop_harness_auto(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    state.harness.stop()
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -95,10 +199,6 @@ fn run_file(data_dir: &Path, collection: &str, run_id: &str) -> PathBuf {
     data_dir
         .join(collection)
         .join(format!("run-{encoded}.json"))
-}
-
-fn development_data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/public/data")
 }
 
 fn development_legacy_snapshot() -> PathBuf {
@@ -134,6 +234,52 @@ fn resolve_cli_path() -> PathBuf {
     development_cli_path()
 }
 
+fn resolve_node_path() -> PathBuf {
+    if let Some(configured) = env::var_os("ORCHETRACE_NODE_PATH") {
+        return PathBuf::from(configured);
+    }
+    let executable = if cfg!(windows) { "node.exe" } else { "node" };
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            let candidate = directory.join(executable);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    for candidate in [
+        PathBuf::from("/opt/homebrew/bin").join(executable),
+        PathBuf::from("/usr/local/bin").join(executable),
+        home_dir().join(".local/bin").join(executable),
+        home_dir().join(".bun/bin").join(executable),
+    ] {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(executable)
+}
+
+fn development_claude_script(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../packages/claude-adapter/src")
+        .join(name)
+}
+
+fn development_adapter_script(package: &str, name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../packages")
+        .join(package)
+        .join("src")
+        .join(name)
+}
+
+fn home_dir() -> PathBuf {
+    env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn desktop_web_origin() -> String {
     if cfg!(windows) {
         "http://tauri.localhost".to_owned()
@@ -148,14 +294,7 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let configured_data_dir = env::var_os("ORCHETRACE_DATA_DIR").map(PathBuf::from);
-            let data_dir = configured_data_dir.unwrap_or_else(|| {
-                let native = app_data_dir.join("data");
-                if cfg!(debug_assertions) && !native.join("run-catalog.json").is_file() {
-                    development_data_dir()
-                } else {
-                    native
-                }
-            });
+            let data_dir = configured_data_dir.unwrap_or_else(|| app_data_dir.join("data"));
             let legacy_snapshot = env::var_os("ORCHETRACE_SNAPSHOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -173,10 +312,65 @@ pub fn run() {
                 live_endpoint: "127.0.0.1:43118".to_owned(),
                 web_origin: desktop_web_origin(),
             });
+            let user_home = home_dir();
+            let claude = ManagedClaude::new(ClaudeConfig {
+                node_path: resolve_node_path(),
+                auto_script: env::var_os("ORCHETRACE_CLAUDE_AUTO_SCRIPT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| development_claude_script("auto-cli.ts")),
+                hook_script: env::var_os("ORCHETRACE_CLAUDE_HOOK_SCRIPT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| development_claude_script("hook-cli.ts")),
+                projects_dir: env::var_os("ORCHETRACE_CLAUDE_PROJECTS_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| user_home.join(".claude/projects")),
+                state_dir: app_data_dir.join("claude-auto"),
+                hook_events_path: user_home.join(".orchetrace/claude-hooks.jsonl"),
+                settings_path: user_home.join(".claude/settings.json"),
+                ingest_host: "127.0.0.1".to_owned(),
+                ingest_port: 43117,
+            });
+            let pi = ManagedRuntimeObserver::new(RuntimeObserverConfig {
+                runtime: "pi",
+                node_path: resolve_node_path(),
+                auto_script: env::var_os("ORCHETRACE_PI_AUTO_SCRIPT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| development_adapter_script("pi-adapter", "auto-cli.ts")),
+                sessions_dir: env::var_os("ORCHETRACE_PI_SESSIONS_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| user_home.join(".pi/agent/sessions")),
+                state_dir: app_data_dir.join("pi-auto"),
+                ingest_host: "127.0.0.1".to_owned(),
+                ingest_port: 43117,
+            });
+            let harness = ManagedRuntimeObserver::new(RuntimeObserverConfig {
+                runtime: "deepseek-harness",
+                node_path: resolve_node_path(),
+                auto_script: env::var_os("ORCHETRACE_DSH_AUTO_SCRIPT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| development_adapter_script("dsh-observer", "auto-cli.ts")),
+                sessions_dir: env::var_os("ORCHETRACE_DSH_SESSIONS_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| user_home.join(".dsh/sessions")),
+                state_dir: app_data_dir.join("dsh-auto"),
+                ingest_host: "127.0.0.1".to_owned(),
+                ingest_port: 43117,
+            });
+            if env::var("ORCHETRACE_AUTOSTART").as_deref() != Ok("0")
+                && let Ok(status) = ingest.start()
+                && let Some(token) = status.connection_token.as_deref()
+            {
+                let _ = claude.start(token);
+                let _ = pi.start(token);
+                let _ = harness.start(token);
+            }
             app.manage(DesktopState {
                 data_dir,
                 legacy_snapshot,
                 ingest,
+                claude,
+                pi,
+                harness,
             });
             Ok(())
         })
@@ -189,7 +383,18 @@ pub fn run() {
             read_legacy_snapshot,
             managed_ingest_status,
             start_managed_ingest,
-            stop_managed_ingest
+            stop_managed_ingest,
+            claude_integration_status,
+            start_claude_auto,
+            stop_claude_auto,
+            enable_claude_hooks,
+            disable_claude_hooks,
+            pi_integration_status,
+            start_pi_auto,
+            stop_pi_auto,
+            harness_integration_status,
+            start_harness_auto,
+            stop_harness_auto
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Orchetrace desktop shell");

@@ -12,132 +12,68 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="app-shell" id="app" aria-busy="true">
+    <div class="app-shell" id="app" data-mode="replay" data-graph-layout="horizontal" aria-busy="true">
       <header class="command-bar" data-tauri-drag-region>
         <a class="brand" href="/" aria-label="Orchetrace home">
-          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="brand-name">ORCHETRACE</span>
+          <span class="brand-name">orche</span>
           <span class="brand-channel" id="brand-channel">/ LOCAL</span>
         </a>
 
-        <div class="run-identity">
-          <span class="eyebrow">ACTIVE RUN</span>
-          <strong id="active-run-name">Loading run catalog…</strong>
-        </div>
+        <details class="run-picker">
+          <summary>
+            <span class="eyebrow">SESSION</span>
+            <strong id="active-run-name">Loading run catalog…</strong>
+          </summary>
+          <div class="run-list" id="run-list" aria-live="polite">
+            <p class="run-list-loading">Reading local run index…</p>
+          </div>
+        </details>
 
         <div class="mode-switch" role="group" aria-label="Run mode">
-          <button class="mode-button active" type="button" data-mode="replay">REPLAY</button>
-          <button class="mode-button" type="button" data-mode="live">
-            <span class="live-dot" aria-hidden="true"></span>LIVE
-          </button>
+          <button class="mode-button active" type="button" data-mode="replay">PAST</button>
+          <button class="mode-button" type="button" data-mode="live"><span class="live-dot" aria-hidden="true"></span>LIVE</button>
         </div>
 
-        <label class="search-box">
-          <span aria-hidden="true">⌕</span>
-          <span class="sr-only">Search agents and tools</span>
-          <input id="search" type="search" placeholder="Search agent or tool" autocomplete="off" />
-          <kbd>⌘ K</kbd>
-        </label>
+        <div class="graph-controls" role="group" aria-label="Graph controls">
+          <label class="search-box"><span aria-hidden="true">⌕</span><span class="sr-only">Search agents and tools</span><input id="search" type="search" placeholder="filter" autocomplete="off" /></label>
+          <label class="status-filter"><span class="sr-only">Filter by status</span><select id="status-filter"><option value="all">ALL</option><option value="running">RUNNING</option><option value="ready">READY</option><option value="idle">IDLE</option><option value="failed">FAILED</option><option value="succeeded">DONE</option></select></label>
+          <div class="layout-switch" role="group" aria-label="Graph layout"><button class="layout-button active" id="layout-horizontal" type="button" aria-label="Horizontal layout" aria-pressed="true">↔</button><button class="layout-button" id="layout-vertical" type="button" aria-label="Vertical layout" aria-pressed="false">↕</button></div>
+          <button class="tool-button" id="zoom-out" type="button" aria-label="Zoom out">−</button><output class="zoom-value" id="zoom-value">100%</output><button class="tool-button" id="zoom-in" type="button" aria-label="Zoom in">+</button><button class="tool-button fit-button" id="fit-graph" type="button">FIT</button>
+        </div>
 
-        <button
-          class="connection-health replay"
-          id="connection-health"
-          type="button"
-          title="Open runtime diagnostics"
-          aria-controls="runtime-drawer"
-          aria-expanded="false"
-        >
-          <span class="health-signal" aria-hidden="true"></span>
-          <span><small>SNAPSHOT</small><strong id="health-label">REPLAY</strong></span>
-        </button>
+        <button class="connection-health replay" id="connection-health" type="button" title="Open runtime diagnostics" aria-controls="runtime-drawer" aria-expanded="false"><span class="health-signal" aria-hidden="true"></span><span><small>CAPTURE</small><strong id="health-label">REPLAY</strong></span></button>
       </header>
 
-      <aside class="run-rail" aria-label="Runs">
-        <div class="rail-heading">
-          <span class="eyebrow">RUNS</span>
-          <button class="icon-button" type="button" aria-label="Add source">+</button>
-        </div>
-        <div class="run-list" id="run-list" aria-live="polite">
-          <p class="run-list-loading">Reading local run index…</p>
-        </div>
-        <div class="rail-section">
-          <span class="eyebrow">SOURCES</span>
-          <div class="source-row" id="source-dsh"><span class="source-glyph">DS</span><span>Harness</span><b id="source-count-dsh">0</b></div>
-          <div class="source-row muted" id="source-claude"><span class="source-glyph">CC</span><span>Claude Code</span><b id="source-count-claude">0</b></div>
-          <div class="source-row muted" id="source-pi"><span class="source-glyph">π</span><span>Pi</span><b id="source-count-pi">0</b></div>
-        </div>
-        <div class="rail-footer">
-          <div><span>INDEX</span><strong id="index-state">LOCAL ONLY</strong></div>
-          <div><span>REDACTION</span><strong>ON</strong></div>
-        </div>
-      </aside>
-
       <main class="graph-panel">
-        <div class="panel-toolbar">
-          <div>
-            <span class="eyebrow">AGENT TOPOLOGY</span>
-            <span class="toolbar-detail" id="graph-summary">Loading run snapshot…</span>
-          </div>
-          <div class="graph-controls" role="group" aria-label="Graph controls">
-            <label class="status-filter">
-              <span class="sr-only">Filter by status</span>
-              <select id="status-filter">
-                <option value="all">ALL STATES</option>
-                <option value="running">RUNNING</option>
-                <option value="ready">READY</option>
-                <option value="idle">IDLE</option>
-                <option value="failed">FAILED</option>
-                <option value="succeeded">SUCCEEDED</option>
-              </select>
-            </label>
-            <button class="tool-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
-            <output class="zoom-value" id="zoom-value">100%</output>
-            <button class="tool-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
-            <button class="tool-button fit-button" id="fit-graph" type="button">FIT</button>
-          </div>
-        </div>
+        <div class="graph-hud"><span id="graph-summary">Loading run snapshot…</span><span id="cursor-state">LATEST STATE</span></div>
         <div class="graph-viewport" id="graph-viewport" tabindex="0" aria-label="Agent topology graph">
-          <div class="graph-spacer" id="graph-spacer">
-            <div class="graph-stage" id="graph-stage">
-              <svg class="edge-layer" id="edge-layer" aria-hidden="true"></svg>
-              <div class="node-layer" id="node-layer"></div>
-            </div>
-          </div>
-          <div class="graph-legend" aria-label="Status legend">
-            <span><i class="status-symbol running">●</i> running</span>
-            <span><i class="status-symbol ready">◆</i> ready</span>
-            <span><i class="status-symbol succeeded">✓</i> done</span>
-            <span><i class="status-symbol failed">✕</i> failed</span>
-          </div>
+          <div class="graph-spacer" id="graph-spacer"><div class="graph-stage" id="graph-stage"><svg class="edge-layer" id="edge-layer" aria-hidden="true"></svg><div class="node-layer" id="node-layer"></div></div></div>
+          <div class="graph-minimap" id="graph-minimap" aria-hidden="true"></div>
+          <div class="graph-legend" aria-label="Status legend"><span><i class="status-symbol running">●</i> running</span><span><i class="status-symbol ready">◆</i> ready</span><span><i class="status-symbol succeeded">✓</i> done</span><span><i class="status-symbol failed">✕</i> failed</span></div>
         </div>
       </main>
 
-      <aside class="inspector" aria-label="Inspector">
-        <div class="inspector-empty" id="inspector-empty">
-          <span class="empty-reticle" aria-hidden="true"></span>
-          <strong>SELECT AN AGENT</strong>
-          <p>Inspect status evidence, tools, activations, and lineage.</p>
-        </div>
+      <aside class="inspector" aria-label="Agent detail" role="dialog" aria-hidden="true">
+        <button class="detail-close" id="detail-close" type="button" aria-label="Close agent detail">esc ×</button>
+        <div class="inspector-empty" id="inspector-empty" hidden></div>
         <div id="inspector-content" hidden></div>
       </aside>
 
       <section class="timeline-panel" aria-label="Run timeline">
-        <div class="timeline-heading">
-          <div>
-            <span class="eyebrow">EXECUTION TIMELINE</span>
-            <strong id="timeline-range">—</strong>
-          </div>
-          <div class="timeline-key">
-            <span><i class="key-block activation"></i>ACTIVATION</span>
-            <span><i class="key-block tool"></i>TOOL</span>
-            <span><i class="key-block failed"></i>FAILURE</span>
-          </div>
-        </div>
+        <div class="timeline-now"><span id="timeline-cursor">—</span><strong id="timeline-event-title">Waiting for run data</strong><span id="timeline-range">—</span></div>
         <div class="timeline-scroll" id="timeline-scroll">
           <div class="timeline-ruler" id="timeline-ruler"></div>
           <div class="timeline-lanes" id="timeline-lanes"></div>
+          <input id="timeline-scrubber" type="range" min="0" max="1000" value="1000" aria-label="Replay position" />
         </div>
+        <footer class="terminal-status">
+          <b>orche</b><button id="timeline-play" type="button">▶ PLAY</button><span>session</span><strong id="footer-stats">0 agents · 0 tools</strong><time id="timeline-date">—</time><span class="terminal-help">q quit · ? help · space play/pause</span>
+        </footer>
       </section>
+
+      <div class="utility-cache" aria-hidden="true">
+        <div id="source-dsh"><span id="source-count-dsh">0</span></div><div id="source-claude"><span id="source-count-claude">0</span></div><div id="source-pi"><span id="source-count-pi">0</span></div><span id="index-state">LOCAL ONLY</span>
+      </div>
     </div>
 
     <button class="drawer-scrim" id="drawer-scrim" type="button" hidden aria-label="Close runtime diagnostics"></button>
@@ -165,6 +101,54 @@
         <div><dt>PROCESS</dt><dd id="runtime-pid">—</dd></div>
         <div><dt>DATA</dt><dd id="runtime-data-dir">—</dd></div>
       </dl>
+
+      <section class="runtime-observers">
+        <div class="runtime-section-heading">
+          <span class="eyebrow">AGENT RECEIVERS</span>
+          <small>AUTO ATTACH</small>
+        </div>
+        <div class="runtime-observer-stack">
+          <article class="runtime-observer-card claude">
+            <div class="runtime-observer-title">
+              <span class="runtime-adapter-mark">CC</span>
+              <strong>CLAUDE CODE</strong>
+              <span class="runtime-mini-phase stopped" id="claude-auto-phase"><i></i><b>STOPPED</b></span>
+            </div>
+            <p id="claude-auto-summary">Desktop mode watches active Claude transcripts automatically.</p>
+            <code id="claude-auto-projects">~/.claude/projects</code>
+            <div class="runtime-observer-actions dual">
+              <button id="claude-auto-action" type="button">START WATCHER</button>
+              <button id="claude-hooks-action" type="button">ENABLE HOOKS</button>
+            </div>
+          </article>
+
+          <article class="runtime-observer-card pi">
+            <div class="runtime-observer-title">
+              <span class="runtime-adapter-mark">π</span>
+              <strong>PI</strong>
+              <span class="runtime-mini-phase stopped" id="pi-auto-phase"><i></i><b>STOPPED</b></span>
+            </div>
+            <p id="pi-auto-summary">Passively follows open Pi session files without launching another agent.</p>
+            <code id="pi-auto-sessions">~/.pi/agent/sessions</code>
+            <div class="runtime-observer-actions">
+              <button id="pi-auto-action" type="button">START WATCHER</button>
+            </div>
+          </article>
+
+          <article class="runtime-observer-card harness">
+            <div class="runtime-observer-title">
+              <span class="runtime-adapter-mark">DS</span>
+              <strong>HARNESS</strong>
+              <span class="runtime-mini-phase stopped" id="harness-auto-phase"><i></i><b>STOPPED</b></span>
+            </div>
+            <p id="harness-auto-summary">Follows Zstandard persistence; the Cordis plugin may add instant status events.</p>
+            <code id="harness-auto-sessions">~/.dsh/sessions</code>
+            <div class="runtime-observer-actions">
+              <button id="harness-auto-action" type="button">START WATCHER</button>
+            </div>
+          </article>
+        </div>
+      </section>
 
       <section class="runtime-token">
         <div>

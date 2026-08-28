@@ -18,16 +18,17 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - 多 Run Catalog、搜索、状态过滤、Inspector 和 Timeline；
 - Rust 确定性 fold、SQLite 事实存储、增量快照和 delta；
 - WebSocket 实时通知，断开后自动降级为轮询；
-- Tauri 桌面壳、受管 `otrace` sidecar 和运行时诊断抽屉；
+- Tauri 桌面壳、受管 `otrace` sidecar、三运行时自动发现和诊断抽屉；
+- 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
 
 ## 运行时支持
 
 | 运行时 | Replay | Live | 子 Agent |
 |---|---|---|---|
-| DeepSeek Harness | Fixture / persistence | Cordis Observer | 原生 session 与 descriptor |
-| Claude Code | JSONL transcript | 增量 polling observer | subagent 与 workflow 文件 |
-| Pi | v1-v3 session JSONL | 受管 RPC bridge | 显式 telemetry extension |
+| DeepSeek Harness | Zstandard persistence | 被动自动发现 + Cordis Observer | 原生 session 与 descriptor |
+| Claude Code | JSONL transcript | 自动发现 + 增量 polling observer | subagent 与 workflow 文件 |
+| Pi | v1-v3 session JSONL | 被动自动发现 + 可选 RPC bridge | 显式 telemetry extension |
 
 Pi 的普通对话分支不会被误判为子 Agent。只有 extension 提供显式 telemetry 时，Orchetrace 才展示 Pi 子 Agent 拓扑。
 
@@ -51,6 +52,7 @@ flowchart LR
 
 - Rust 1.88 或更新版本；
 - Node.js 22 或更新版本；
+- `zstd` 命令（DeepSeek Harness 多帧 persistence 被动监听）；
 - macOS、Linux 或 Windows；
 - 启动桌面壳时需要本机已安装 [Tauri 2 对应的系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
@@ -63,7 +65,7 @@ flowchart LR
 ```bash
 npm run fixture:demo
 
-cargo run -q -p orchetrace-cli -- \
+cargo run -q -p orchetrace-cli --bin otrace -- \
   fold fixtures/dsh/demo-canonical-events.jsonl \
   --data-dir apps/web/public/data
 
@@ -72,12 +74,43 @@ npm run dev:web
 
 然后访问 <http://127.0.0.1:4173>。
 
+## 直接在终端中打开
+
+无需浏览器或 Tauri 窗口，可以直接在当前终端启动全屏观察界面：
+
+```bash
+npm run tui
+```
+
+安装为全局命令后，可以在任意目录直接执行 `orche`：
+
+```bash
+cargo install --path crates/cli --bin orche
+orche
+```
+
+`orche` 会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
+
+```bash
+orche --data-dir /path/to/orchetrace/data
+```
+
+主要快捷键：
+
+- `↑` / `↓` 或 `j` / `k`：选择 Agent；
+- `Enter`：打开或关闭右侧详情；
+- `←` / `→` 或 `h` / `l`：移动真实时间游标；
+- `Space`：以真实时间 1× 播放或暂停；
+- `[` / `]`：切换 Run；
+- `f`：恢复跟随最新状态；
+- `q`：退出并返回原终端。
+
 ## 启动本地 Live 服务
 
 ```bash
 export ORCHETRACE_TOKEN="$(openssl rand -hex 32)"
 
-cargo run -q -p orchetrace-cli -- \
+cargo run -q -p orchetrace-cli --bin otrace -- \
   serve \
   --listen 127.0.0.1:43117 \
   --live-listen 127.0.0.1:43118 \
@@ -99,12 +132,26 @@ npm run claude:map -- /path/to/session.jsonl \
   --source-id my-workspace \
   --output /tmp/claude-events.jsonl
 
-cargo run -q -p orchetrace-cli -- \
+cargo run -q -p orchetrace-cli --bin otrace -- \
   fold /tmp/claude-events.jsonl \
   --data-dir /tmp/orchetrace-claude
 ```
 
-在 `otrace serve` 已运行且使用相同 token 时启动 Live Observer：
+在 `otrace serve` 已运行且使用相同 token 时，可以自动发现当前和新打开的 Claude 会话：
+
+```bash
+npm run claude:auto
+```
+
+自动发现器监听 `~/.claude/projects`，为最近活跃的每条根 transcript 创建独立 Observer，并自动跟踪其 `subagents` 和 `workflows`。已经打开的旧终端可通过一次性 Claude Hook 集成在下一次 prompt 或子 Agent 生命周期事件时精确接管：
+
+```bash
+npm run claude:hook -- install
+```
+
+Hook 只登记 `session_id`、`transcript_path`、`cwd` 和子 Agent 身份，不保存 prompt 或回答正文。可用 `status` 检查、用 `uninstall` 完整移除 Orchetrace 管理的 Hook，其他 Claude 设置保持不变。
+
+只监听指定 transcript 时仍可使用：
 
 ```bash
 npm run claude:live -- /path/to/session.jsonl \
@@ -114,7 +161,19 @@ npm run claude:live -- /path/to/session.jsonl \
 
 Adapter 会自动发现相邻的 `subagents` 和 `workflows`，并在 Rust ACK 后才提交读取 cursor。
 
+Tauri 桌面端启动受管 Ingest 时会同时启动 Claude 自动发现器；Runtime Diagnostics 中可以独立启停 watcher，并一键启用或移除生命周期 Hooks。
+桌面端默认在启动时自动拉起 Ingest 和 watcher；需要纯 Replay 模式时可设置 `ORCHETRACE_AUTOSTART=0`。
+
 ## 接入 Pi
+
+监听当前已经打开以及随后新建的 Pi 会话：
+
+```bash
+export ORCHETRACE_TOKEN="<与 otrace serve 相同的 token>"
+npm run pi:auto
+```
+
+自动发现器递归监听 `~/.pi/agent/sessions` 中最近 6 小时活跃的 JSONL，会话事件在 Rust ACK 后才提交本地 cursor。它只读取 Pi 已经写入的文件，不会启动、恢复或控制另一个 Pi 进程；如需导入全部历史，可追加 `-- --include-existing`。
 
 Replay 一个 Pi session：
 
@@ -142,7 +201,20 @@ npm run pi:live -- /path/to/pi-session.jsonl \
 
 默认 RPC 命令为 `pi --mode rpc --session <path>`。
 
+Tauri 桌面端会随受管 Ingest 自动启动 Pi 被动 watcher，也可在 Runtime Diagnostics 中独立启停。RPC Bridge 仍保留给需要完整 RPC 生命周期或由 Orchetrace 主动托管 Pi 的场景。
+
 ## 接入 DeepSeek Harness
+
+无需修改 Harness 配置即可监听当前和新会话：
+
+```bash
+export ORCHETRACE_TOKEN="<与 otrace serve 相同的 token>"
+npm run dsh:auto
+```
+
+被动 watcher 监听 `~/.dsh/sessions/**/session.jsonl.zstd`，解码 Harness 的多帧 Zstandard persistence，并以 `dsh-local + session id + seq` 生成稳定事件 ID。默认接管最近 6 小时活跃会话；`-- --include-existing` 可导入全部历史。Tauri 桌面端会自动托管这一 watcher。
+
+若需要比 persistence 落盘更早的 Agent status/disposed 事件，可同时启用进程内 Cordis Observer。两条通道使用相同默认 `sourceId=dsh-local`，Rust 会按事件 ID 幂等去重：
 
 在 Harness 插件配置中加载 `@orchetrace/dsh-observer`，并让 Observer 与 `otrace serve` 使用同一个 token：
 
@@ -151,10 +223,10 @@ npm run pi:live -- /path/to/pi-session.jsonl \
   config:
     host: 127.0.0.1
     port: 43117
-    sourceId: my-workspace
+    sourceId: dsh-local
 ```
 
-token 可以通过插件的 `config.token` 提供，也可以从 `ORCHETRACE_TOKEN` 环境变量读取。Observer 会组合实时事件与可用的冷 session persistence，并在断线后重发未确认事件。
+token 可以通过插件的 `config.token` 提供，也可以从 `ORCHETRACE_TOKEN` 环境变量读取。Observer 会组合实时事件与可用的冷 session persistence，并在断线后重发未确认事件。若覆盖 `sourceId`，被动 watcher 与插件会形成两个独立来源；需要合并时请保持 `dsh-local`。
 
 ## 桌面开发
 
@@ -166,7 +238,7 @@ npm run desktop:check
 npm run desktop:dev
 ```
 
-桌面端可以固定参数启动和停止受管 sidecar。token 只通过子进程环境传递，不出现在命令行；停止时优先执行认证后的协议级关闭，超时后才强制终止。
+桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness 三个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
 
 ## 验证
 
@@ -211,8 +283,9 @@ scripts/                      开发、smoke 和性能脚本
 ## 当前限制
 
 - Claude Live 仍使用 polling，大型 transcript 尚未使用 byte-range parser cache；
+- Pi 被动 watcher 会防御性重读活动分支，大型 session 尚未使用 byte-range parser cache；
 - Pi catch-up 尚未直接映射 RPC `entries`；
-- DeepSeek Harness 需要补充更多真实 Loader 版本组合测试；
+- DeepSeek Harness 被动 watcher 依赖 `zstd` CLI；精确的瞬时 Agent status 仍需要 Cordis Observer；
 - Tauri bundle、代码签名、自动更新与跨平台安装验证尚未完成；
 - Orchetrace 仍是工作名称，公开发行前需要完成包名和商标检查。
 

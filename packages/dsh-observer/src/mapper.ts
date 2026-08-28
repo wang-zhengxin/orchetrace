@@ -240,6 +240,37 @@ function mapSessionEvent(record: Extract<DshRecord, { kind: "session_event" }>):
         model: event.data.agentModel,
         subagent_provider: event.data.provider,
       });
+    case "session/title":
+      return canonical("session.metadata_changed", {
+        label: event.data.title,
+      });
+    case "sandbox/mode":
+      return canonical("session.metadata_changed", {
+        sandbox_mode: event.data.mode,
+      });
+    case "approval/policy":
+      return canonical("session.metadata_changed", {
+        approval_policy: event.data.policy,
+      });
+    case "permission/preset":
+      return canonical("session.metadata_changed", {
+        permission_preset: event.data.preset ?? event.data.name,
+      });
+    case "agent-preset/selected":
+      return canonical("session.metadata_changed", {
+        agent_preset: event.data.preset ?? event.data.name,
+      });
+    case "approval/asked":
+      return canonical("agent.status_changed", {
+        status: "waiting",
+        reason: "approval",
+      });
+    case "approval/decided":
+      return canonical("agent.status_changed", {
+        status: "running",
+        reason: "approval-decided",
+        decision: event.data.decision,
+      });
     case "compaction/end":
       return canonical("context.compacted", {
         tokens_before: event.data.tokensBefore,
@@ -254,6 +285,9 @@ function mapSessionEvent(record: Extract<DshRecord, { kind: "session_event" }>):
     case "request/header":
     case "request/context":
     case "session/end-seed":
+    case "agent/inbox/spliced":
+    case "session/title-llm-request":
+    case "web/deepseek-search-llm-request":
       return [];
     default:
       if (event.ignorable) return [];

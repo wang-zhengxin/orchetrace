@@ -2,13 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  disableClaudeHooks,
+  enableClaudeHooks,
   hexUtf8,
   readCatalog,
+  readClaudeIntegrationStatus,
   readDesktopInfo,
   readManagedIngestStatus,
+  readPiIntegrationStatus,
+  readHarnessIntegrationStatus,
   readRunSnapshot,
   startManagedIngest,
+  startPiAuto,
+  startHarnessAuto,
+  startClaudeAuto,
+  stopClaudeAuto,
   stopManagedIngest,
+  stopPiAuto,
+  stopHarnessAuto,
 } from "./desktop-bridge.js";
 
 test("native catalog IPC is preferred without issuing an HTTP request", async () => {
@@ -26,6 +37,29 @@ test("native catalog IPC is preferred without issuing an HTTP request", async ()
 
   assert.equal(value, catalog);
   assert.deepEqual(calls, [["read_catalog", undefined]]);
+});
+
+test("Pi and Harness passive observers use fixed lifecycle commands", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    return { phase: command.startsWith("stop_") ? "stopped" : "running" };
+  };
+
+  assert.equal((await readPiIntegrationStatus({ invoke })).phase, "running");
+  assert.equal((await startPiAuto({ invoke })).phase, "running");
+  assert.equal((await stopPiAuto({ invoke })).phase, "stopped");
+  assert.equal((await readHarnessIntegrationStatus({ invoke })).phase, "running");
+  assert.equal((await startHarnessAuto({ invoke })).phase, "running");
+  assert.equal((await stopHarnessAuto({ invoke })).phase, "stopped");
+  assert.deepEqual(calls, [
+    ["pi_integration_status", undefined],
+    ["start_pi_auto", undefined],
+    ["stop_pi_auto", undefined],
+    ["harness_integration_status", undefined],
+    ["start_harness_auto", undefined],
+    ["stop_harness_auto", undefined],
+  ]);
 });
 
 test("missing native data falls back to the packaged HTTP asset", async () => {
@@ -88,4 +122,25 @@ test("managed ingest controls remain unavailable in a regular browser", async ()
   assert.equal(await readManagedIngestStatus({ invoke: null }), null);
   assert.equal(await startManagedIngest({ invoke: null }), null);
   assert.equal(await stopManagedIngest({ invoke: null }), null);
+});
+
+test("Claude integration lifecycle uses fixed no-argument desktop commands", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    return { phase: command === "stop_claude_auto" ? "stopped" : "running" };
+  };
+
+  assert.equal((await readClaudeIntegrationStatus({ invoke })).phase, "running");
+  assert.equal((await startClaudeAuto({ invoke })).phase, "running");
+  assert.equal((await stopClaudeAuto({ invoke })).phase, "stopped");
+  assert.equal((await enableClaudeHooks({ invoke })).phase, "running");
+  assert.equal((await disableClaudeHooks({ invoke })).phase, "running");
+  assert.deepEqual(calls, [
+    ["claude_integration_status", undefined],
+    ["start_claude_auto", undefined],
+    ["stop_claude_auto", undefined],
+    ["enable_claude_hooks", undefined],
+    ["disable_claude_hooks", undefined],
+  ]);
 });

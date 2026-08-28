@@ -12,10 +12,14 @@
     "fixture:demo": "node packages/dsh-observer/src/generate-demo.ts",
     "fixture:claude": "node packages/claude-adapter/src/generate-fixture.ts",
     "fixture:pi": "node packages/pi-adapter/src/generate-fixture.ts",
+    "dsh:auto": "node packages/dsh-observer/src/auto-cli.ts",
     "claude:map": "node packages/claude-adapter/src/cli.ts",
     "claude:live": "node packages/claude-adapter/src/live-cli.ts",
+    "claude:auto": "node packages/claude-adapter/src/auto-cli.ts",
+    "claude:hook": "node packages/claude-adapter/src/hook-cli.ts",
     "pi:map": "node packages/pi-adapter/src/cli.ts",
     "pi:live": "node packages/pi-adapter/src/live-cli.ts",
+    "pi:auto": "node packages/pi-adapter/src/auto-cli.ts",
     "test:adapter": "node --test packages/dsh-observer/test/*.test.ts",
     "test:claude": "node --test packages/claude-adapter/test/*.test.ts",
     "test:pi": "node --test packages/pi-adapter/test/*.test.ts",
@@ -24,6 +28,7 @@
     "desktop:prepare": "node scripts/build-desktop.mjs",
     "desktop:dev": "node scripts/run-desktop.mjs run",
     "desktop:check": "node scripts/run-desktop.mjs check",
+    "tui": "cargo run -q -p orchetrace-cli --bin orche --",
     "dev:web": "node scripts/dev-server.mjs",
     "check": "npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:pi-extension && npm run test:web"
   }

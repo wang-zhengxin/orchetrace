@@ -7,6 +7,20 @@ import { DshObserver } from "./observer.ts";
 export const name = "orchetrace-observer";
 export const inject = ["sessions", "agents"];
 
+export { DshAutoDiscovery, discoverDshPersistence } from "./auto-discovery.ts";
+export { loadDshPersistence } from "./persistence-loader.ts";
+export { DshPersistenceObserver } from "./persistence-observer.ts";
+export type {
+  DshAutoDiscoveryOptions,
+  DshAutoDiscoveryStatus,
+  DshPersistenceCandidate,
+} from "./auto-discovery.ts";
+export type { DshPersistenceDiagnostic, DshPersistenceLoadResult } from "./persistence-loader.ts";
+export type {
+  DshPersistenceObserverOptions,
+  DshPersistenceScanResult,
+} from "./persistence-observer.ts";
+
 export interface Config {
   sourceId?: string;
   host?: string;
@@ -37,7 +51,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       on: ctx.on.bind(ctx) as HarnessContextLike["on"],
     };
     const observer = new DshObserver(harnessContext, sink, {
-      sourceId: config.sourceId,
+      sourceId: config.sourceId ?? "dsh-local",
       onDiagnostic: report,
     });
     void observer.start().catch((cause: unknown) =>

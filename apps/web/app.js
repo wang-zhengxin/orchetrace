@@ -1,14 +1,26 @@
 import { applyRunSnapshotDelta } from "./run-delta.js";
+import { agentEventsAtTime, snapshotAtTime, timelineBounds } from "./time-travel.js";
 import {
+  disableClaudeHooks,
+  enableClaudeHooks,
   readCatalog,
+  readClaudeIntegrationStatus,
   readDesktopInfo,
   readLegacySnapshot,
   readLiveConfig,
+  readHarnessIntegrationStatus,
   readManagedIngestStatus,
+  readPiIntegrationStatus,
   readRunDelta,
   readRunSnapshot,
   startManagedIngest,
+  startHarnessAuto,
+  startPiAuto,
+  startClaudeAuto,
+  stopClaudeAuto,
+  stopHarnessAuto,
   stopManagedIngest,
+  stopPiAuto,
 } from "./desktop-bridge.js";
 
 const STATUS = {
@@ -34,6 +46,9 @@ const state = {
   query: "",
   status: "all",
   zoom: 1,
+  graphLayout: "horizontal",
+  nodeWidth: 184,
+  nodeHeight: 96,
   positions: new Map(),
   graphWidth: 830,
   graphHeight: 400,
@@ -47,9 +62,18 @@ const state = {
   pendingDeltaRunIds: new Set(),
   desktopInfo: null,
   managedIngest: null,
+  claudeIntegration: null,
+  piIntegration: null,
+  harnessIntegration: null,
   runtimeDrawerOpen: false,
   runtimePollTimer: null,
   runtimeBusy: false,
+  timeCursorMs: null,
+  cursorPinned: false,
+  detailOpen: false,
+  playbackFrame: null,
+  playbackLastFrame: null,
+  playbackLastRender: null,
 };
 
 const refs = Object.fromEntries(
@@ -67,11 +91,23 @@ const refs = Object.fromEntries(
     "zoom-in",
     "zoom-value",
     "fit-graph",
+    "layout-horizontal",
+    "layout-vertical",
     "inspector-empty",
     "inspector-content",
     "timeline-range",
+    "timeline-scroll",
     "timeline-ruler",
     "timeline-lanes",
+    "timeline-scrubber",
+    "timeline-cursor",
+    "timeline-event-title",
+    "timeline-play",
+    "timeline-date",
+    "footer-stats",
+    "cursor-state",
+    "graph-minimap",
+    "detail-close",
     "run-list",
     "active-run-name",
     "source-dsh",
@@ -93,6 +129,19 @@ const refs = Object.fromEntries(
     "runtime-summary",
     "runtime-error",
     "managed-ingest-action",
+    "claude-auto-phase",
+    "claude-auto-summary",
+    "claude-auto-projects",
+    "claude-auto-action",
+    "claude-hooks-action",
+    "pi-auto-phase",
+    "pi-auto-summary",
+    "pi-auto-sessions",
+    "pi-auto-action",
+    "harness-auto-phase",
+    "harness-auto-summary",
+    "harness-auto-sessions",
+    "harness-auto-action",
     "runtime-ingest-endpoint",
     "runtime-live-endpoint",
     "runtime-pid",
@@ -127,6 +176,9 @@ async function initializeShell() {
   state.desktopInfo = info;
   if (!info) {
     renderManagedIngest(null);
+    renderClaudeIntegration(null);
+    renderPassiveIntegration("pi", null);
+    renderPassiveIntegration("harness", null);
     return;
   }
   document.documentElement.dataset.shell = info.shell;
@@ -150,17 +202,38 @@ function wireInteractions() {
   refs.zoomIn.addEventListener("click", () => setZoom(state.zoom + 0.1));
   refs.zoomOut.addEventListener("click", () => setZoom(state.zoom - 0.1));
   refs.fitGraph.addEventListener("click", fitGraph);
+  refs.layoutHorizontal.addEventListener("click", () => setGraphLayout("horizontal"));
+  refs.layoutVertical.addEventListener("click", () => setGraphLayout("vertical"));
   refs.connectionHealth.addEventListener("click", openRuntimeDrawer);
   refs.runtimeClose.addEventListener("click", closeRuntimeDrawer);
   refs.drawerScrim.addEventListener("click", closeRuntimeDrawer);
   refs.managedIngestAction.addEventListener("click", () => void toggleManagedIngest());
+  refs.claudeAutoAction.addEventListener("click", () => void toggleClaudeAuto());
+  refs.claudeHooksAction.addEventListener("click", () => void toggleClaudeHooks());
+  refs.piAutoAction.addEventListener("click", () => void togglePassiveObserver("pi"));
+  refs.harnessAutoAction.addEventListener("click", () => void togglePassiveObserver("harness"));
   refs.runtimeTokenCopy.addEventListener("click", () => void copyManagedToken());
+  refs.timelineScrubber.addEventListener("input", () => {
+    if (!state.snapshot) return;
+    stopPlayback();
+    const bounds = timelineBounds(state.snapshot);
+    state.timeCursorMs = bounds.start + (Number(refs.timelineScrubber.value) / 1000) * bounds.span;
+    state.cursorPinned = state.timeCursorMs < bounds.end - 1;
+    render();
+  });
+  refs.timelinePlay.addEventListener("click", togglePlayback);
+  refs.detailClose.addEventListener("click", closeAgentDetail);
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
       refs.search.focus();
     }
     if (event.key === "Escape" && state.runtimeDrawerOpen) closeRuntimeDrawer();
+    else if (event.key === "Escape" && state.detailOpen) closeAgentDetail();
+    if (event.code === "Space" && !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) {
+      event.preventDefault();
+      togglePlayback();
+    }
   });
   document.querySelectorAll(".mode-button").forEach((button) => {
     button.addEventListener("click", () => activateMode(button.dataset.mode));
@@ -172,6 +245,7 @@ function wireInteractions() {
     }
   });
   window.addEventListener("beforeunload", () => {
+    stopPlayback();
     stopLiveTransport();
     stopRuntimePolling();
   });
@@ -212,12 +286,26 @@ function stopRuntimePolling() {
 async function refreshManagedIngest() {
   if (!state.desktopInfo) {
     renderManagedIngest(null);
+    renderClaudeIntegration(null);
+    renderPassiveIntegration("pi", null);
+    renderPassiveIntegration("harness", null);
     return;
   }
   try {
-    const status = await readManagedIngestStatus();
+    const [status, claude, pi, harness] = await Promise.all([
+      readManagedIngestStatus(),
+      readClaudeIntegrationStatus(),
+      readPiIntegrationStatus(),
+      readHarnessIntegrationStatus(),
+    ]);
     state.managedIngest = status;
+    state.claudeIntegration = claude;
+    state.piIntegration = pi;
+    state.harnessIntegration = harness;
     renderManagedIngest(status);
+    renderClaudeIntegration(claude);
+    renderPassiveIntegration("pi", pi);
+    renderPassiveIntegration("harness", harness);
     setRuntimeError("");
   } catch (error) {
     setRuntimeError(String(error));
@@ -235,6 +323,15 @@ async function toggleManagedIngest() {
     const status = running ? await stopManagedIngest() : await startManagedIngest();
     state.managedIngest = status;
     renderManagedIngest(status);
+    const [claude, pi, harness] = await Promise.all([
+      readClaudeIntegrationStatus(),
+      readPiIntegrationStatus(),
+      readHarnessIntegrationStatus(),
+    ]);
+    state.claudeIntegration = claude;
+    state.piIntegration = pi;
+    state.harnessIntegration = harness;
+    renderAllIntegrations();
     if (status?.phase === "running") activateMode("live");
     else if (state.mode === "live") activateMode("replay");
   } catch (error) {
@@ -243,6 +340,66 @@ async function toggleManagedIngest() {
   } finally {
     state.runtimeBusy = false;
     renderManagedIngest(state.managedIngest);
+    renderAllIntegrations();
+  }
+}
+
+async function togglePassiveObserver(runtime) {
+  if (state.runtimeBusy || !state.desktopInfo) return;
+  const config = runtime === "pi"
+    ? { key: "piIntegration", start: startPiAuto, stop: stopPiAuto }
+    : { key: "harnessIntegration", start: startHarnessAuto, stop: stopHarnessAuto };
+  state.runtimeBusy = true;
+  renderAllIntegrations();
+  setRuntimeError("");
+  try {
+    const running = state[config.key]?.phase === "running";
+    state[config.key] = running ? await config.stop() : await config.start();
+    renderPassiveIntegration(runtime, state[config.key]);
+  } catch (error) {
+    setRuntimeError(String(error));
+    await refreshManagedIngest();
+  } finally {
+    state.runtimeBusy = false;
+    renderManagedIngest(state.managedIngest);
+    renderAllIntegrations();
+  }
+}
+
+async function toggleClaudeAuto() {
+  if (state.runtimeBusy || !state.desktopInfo) return;
+  state.runtimeBusy = true;
+  renderClaudeIntegration(state.claudeIntegration);
+  setRuntimeError("");
+  try {
+    const running = state.claudeIntegration?.phase === "running";
+    state.claudeIntegration = running ? await stopClaudeAuto() : await startClaudeAuto();
+    renderClaudeIntegration(state.claudeIntegration);
+  } catch (error) {
+    setRuntimeError(String(error));
+    await refreshManagedIngest();
+  } finally {
+    state.runtimeBusy = false;
+    renderManagedIngest(state.managedIngest);
+    renderClaudeIntegration(state.claudeIntegration);
+  }
+}
+
+async function toggleClaudeHooks() {
+  if (state.runtimeBusy || !state.desktopInfo) return;
+  state.runtimeBusy = true;
+  renderClaudeIntegration(state.claudeIntegration);
+  setRuntimeError("");
+  try {
+    const installed = Boolean(state.claudeIntegration?.hooks_installed);
+    state.claudeIntegration = installed ? await disableClaudeHooks() : await enableClaudeHooks();
+    renderClaudeIntegration(state.claudeIntegration);
+  } catch (error) {
+    setRuntimeError(String(error));
+    await refreshManagedIngest();
+  } finally {
+    state.runtimeBusy = false;
+    renderClaudeIntegration(state.claudeIntegration);
   }
 }
 
@@ -299,7 +456,101 @@ function renderManagedIngest(status) {
   refs.runtimeTokenValue.textContent = token ? `•••••••••••• · ${token.slice(-8)}` : "NOT ISSUED";
   refs.runtimeTokenCopy.disabled = !token;
   renderRuntimeSources();
-  renderRuntimeLogs(status?.logs ?? []);
+  renderRuntimeLogs(mergedRuntimeLogs());
+}
+
+function renderClaudeIntegration(status) {
+  const phase = status?.phase ?? "browser";
+  const labels = {
+    running: "WATCHING",
+    stopped: "STOPPED",
+    exited: "EXITED",
+    unavailable: "UNAVAILABLE",
+    browser: "DESKTOP ONLY",
+  };
+  refs.claudeAutoPhase.className = `runtime-mini-phase ${phase}`;
+  refs.claudeAutoPhase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
+  const summaries = {
+    running: status?.hooks_installed
+      ? "Active sessions and lifecycle hooks are being observed."
+      : "Recent transcripts are watched; enable hooks for exact lifecycle registration.",
+    stopped: "Starts automatically with managed ingest, or can be controlled independently.",
+    exited: "The watcher exited; inspect the process log before restarting.",
+    unavailable: "Node.js or the Claude adapter sidecar is unavailable.",
+    browser: "Claude auto-discovery is managed by the Tauri desktop shell.",
+  };
+  refs.claudeAutoSummary.textContent = summaries[phase] ?? "Claude integration status is unavailable.";
+  refs.claudeAutoProjects.textContent = status?.projects_dir ?? "~/.claude/projects";
+  refs.claudeAutoProjects.title = refs.claudeAutoProjects.textContent;
+  refs.claudeAutoAction.hidden = phase === "browser";
+  refs.claudeHooksAction.hidden = phase === "browser";
+  refs.claudeAutoAction.disabled =
+    state.runtimeBusy || phase === "unavailable" || state.managedIngest?.phase !== "running";
+  refs.claudeHooksAction.disabled = state.runtimeBusy || phase === "unavailable";
+  refs.claudeAutoAction.textContent = phase === "running" ? "STOP WATCHER" : "START WATCHER";
+  refs.claudeHooksAction.textContent = status?.hooks_installed ? "DISABLE HOOKS" : "ENABLE HOOKS";
+  renderRuntimeLogs(mergedRuntimeLogs());
+}
+
+function renderPassiveIntegration(runtime, status) {
+  const refsByRuntime = runtime === "pi"
+    ? {
+        phase: refs.piAutoPhase,
+        summary: refs.piAutoSummary,
+        sessions: refs.piAutoSessions,
+        action: refs.piAutoAction,
+      }
+    : {
+        phase: refs.harnessAutoPhase,
+        summary: refs.harnessAutoSummary,
+        sessions: refs.harnessAutoSessions,
+        action: refs.harnessAutoAction,
+      };
+  const phase = status?.phase ?? "browser";
+  const labels = {
+    running: "WATCHING",
+    stopped: "STOPPED",
+    exited: "EXITED",
+    unavailable: "UNAVAILABLE",
+    browser: "DESKTOP ONLY",
+  };
+  refsByRuntime.phase.className = `runtime-mini-phase ${phase}`;
+  refsByRuntime.phase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
+  const name = runtime === "pi" ? "Pi" : "Harness";
+  const summaries = {
+    running: runtime === "pi"
+      ? "Open Pi sessions are being tailed passively; no second agent process is launched."
+      : "Harness persistence is being decoded and synchronized with stable session cursors.",
+    stopped: "Starts automatically with managed ingest, or can be controlled independently.",
+    exited: `The ${name} watcher exited; inspect the merged process log before restarting.`,
+    unavailable: `Node.js or the ${name} adapter sidecar is unavailable.`,
+    browser: `${name} auto-discovery is managed by the Tauri desktop shell.`,
+  };
+  refsByRuntime.summary.textContent = summaries[phase] ?? `${name} integration status is unavailable.`;
+  refsByRuntime.sessions.textContent = status?.sessions_dir ?? (runtime === "pi" ? "~/.pi/agent/sessions" : "~/.dsh/sessions");
+  refsByRuntime.sessions.title = refsByRuntime.sessions.textContent;
+  refsByRuntime.action.hidden = phase === "browser";
+  refsByRuntime.action.disabled =
+    state.runtimeBusy || phase === "unavailable" || state.managedIngest?.phase !== "running";
+  refsByRuntime.action.textContent = phase === "running" ? "STOP WATCHER" : "START WATCHER";
+  renderRuntimeLogs(mergedRuntimeLogs());
+}
+
+function renderAllIntegrations() {
+  renderClaudeIntegration(state.claudeIntegration);
+  renderPassiveIntegration("pi", state.piIntegration);
+  renderPassiveIntegration("harness", state.harnessIntegration);
+}
+
+function mergedRuntimeLogs() {
+  return [
+    ...(state.managedIngest?.logs ?? []),
+    ...(state.claudeIntegration?.logs ?? []),
+    ...(state.piIntegration?.logs ?? []),
+    ...(state.harnessIntegration?.logs ?? []),
+  ]
+    .sort((left, right) => Number(left.at_ms) - Number(right.at_ms))
+    .slice(-160);
 }
 
 function renderRuntimeSources() {
@@ -341,6 +592,7 @@ function setRuntimeError(message) {
 
 function setMode(mode) {
   state.mode = mode === "live" ? "live" : "replay";
+  refs.app.dataset.mode = state.mode;
   stopLiveTransport();
   if (state.mode === "live") {
     setHealth("syncing", "SYNCING");
@@ -478,7 +730,10 @@ async function refreshCatalog(initial, deltaRunIds = null) {
     }
     state.catalog = catalog;
     if (!catalog.runs.some((run) => run.run_id === state.currentRunId)) {
-      state.currentRunId = catalog.runs[0].run_id;
+      const showcase = catalog.runs
+        .filter((run) => run.source_id === "local-demo")
+        .sort((left, right) => right.agent_count - left.agent_count || right.event_count - left.event_count)[0];
+      state.currentRunId = (showcase ?? catalog.runs[0]).run_id;
     }
     const summary = currentRunSummary();
     const changed =
@@ -551,6 +806,9 @@ function applySnapshot(snapshot, runId, highlight, delivery = "snapshot") {
     state.snapshot = snapshot;
     state.loadedRunId = runId;
     refs.app.dataset.delivery = delivery;
+  const bounds = timelineBounds(snapshot);
+  if (!state.cursorPinned || !Number.isFinite(state.timeCursorMs)) state.timeCursorMs = bounds.end;
+  else state.timeCursorMs = clamp(state.timeCursorMs, bounds.start, bounds.end);
   if (!snapshot.agents.some((agent) => agent.id === state.selectedId)) {
     state.selectedId = snapshot.root_session_id;
   }
@@ -562,7 +820,11 @@ function applySnapshot(snapshot, runId, highlight, delivery = "snapshot") {
 
 async function selectRun(runId) {
   if (runId === state.currentRunId && runId === state.loadedRunId) return;
+  stopPlayback();
+  state.cursorPinned = false;
+  state.detailOpen = false;
   state.currentRunId = runId;
+  document.querySelector(".run-picker")?.removeAttribute("open");
   renderRunRail();
   try {
     await loadRunSnapshot(runId, true);
@@ -582,8 +844,10 @@ function setHealth(stateName, label) {
 
 function render() {
   const { snapshot } = state;
+  const view = currentView();
+  refs.app.classList.toggle("dense-topology", view.agents.length > 6);
   renderRunRail();
-  refs.graphSummary.textContent = `${snapshot.agents.length} agents · ${snapshot.edges.length} delegations · ${snapshot.event_count} canonical events`;
+  refs.graphSummary.textContent = `${view.agents.length}/${snapshot.agents.length} agents · ${view.edges.length} links · ${view.timeline.length} observed events`;
   renderGraph();
   renderInspector();
   renderTimeline();
@@ -676,34 +940,73 @@ function layoutGraph() {
     });
   }
 
+  const cardWidth = state.nodeWidth;
+  const cardHeight = state.nodeHeight;
   let leaf = 0;
   let maxDepth = 0;
   const positions = new Map();
   const place = (id, depth) => {
     maxDepth = Math.max(maxDepth, depth);
     const childIds = children.get(id) ?? [];
-    let y;
+    let unit;
     if (childIds.length === 0) {
-      y = 76 + leaf * 148;
+      unit = leaf;
       leaf += 1;
     } else {
-      const childYs = childIds.map((child) => place(child, depth + 1));
-      y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
+      const childUnits = childIds.map((child) => place(child, depth + 1));
+      unit = childUnits.reduce((sum, value) => sum + value, 0) / childUnits.length;
     }
-    positions.set(id, { x: 62 + depth * 250, y, depth });
-    return y;
+    positions.set(id, { unit, depth });
+    return unit;
   };
   place(snapshot.root_session_id, 0);
   for (const agent of snapshot.agents) {
     if (!positions.has(agent.id)) place(agent.id, 0);
   }
+
+  const leafCount = Math.max(leaf, 1);
+  const viewportWidth = Math.max(760, refs.graphViewport?.clientWidth ?? 0);
+  const viewportHeight = Math.max(440, refs.graphViewport?.clientHeight ?? 0);
+
+  if (state.graphLayout === "horizontal") {
+    const leafStep = 214;
+    const depthStep = 132;
+    const contentWidth = cardWidth + Math.max(0, leafCount - 1) * leafStep;
+    const contentHeight = cardHeight + maxDepth * depthStep;
+    const leftInset = Math.max(48, (viewportWidth - contentWidth) / 2);
+    const topInset = Math.max(40, (viewportHeight - contentHeight) / 2);
+    for (const [id, position] of positions) {
+      positions.set(id, {
+        x: leftInset + position.unit * leafStep,
+        y: topInset + position.depth * depthStep,
+        depth: position.depth,
+      });
+    }
+    state.graphWidth = Math.max(viewportWidth, leftInset * 2 + contentWidth);
+    state.graphHeight = Math.max(viewportHeight, topInset * 2 + contentHeight);
+  } else {
+    const depthStep = 278;
+    const leafStep = 112;
+    const contentWidth = cardWidth + maxDepth * depthStep;
+    const contentHeight = cardHeight + Math.max(0, leafCount - 1) * leafStep;
+    const leftInset = 52;
+    const topInset = Math.max(38, (viewportHeight - contentHeight) / 2);
+    for (const [id, position] of positions) {
+      positions.set(id, {
+        x: leftInset + position.depth * depthStep,
+        y: topInset + position.unit * leafStep,
+        depth: position.depth,
+      });
+    }
+    state.graphWidth = Math.max(viewportWidth, leftInset * 2 + contentWidth);
+    state.graphHeight = Math.max(viewportHeight, topInset * 2 + contentHeight);
+  }
   state.positions = positions;
-  state.graphWidth = Math.max(760, 80 + (maxDepth + 1) * 250);
-  state.graphHeight = Math.max(400, 92 + Math.max(leaf, 1) * 148);
 }
 
 function renderGraph() {
   if (!state.snapshot) return;
+  const snapshot = currentView();
   refs.nodeLayer.replaceChildren();
   refs.edgeLayer.replaceChildren();
   refs.edgeLayer.setAttribute("viewBox", `0 0 ${state.graphWidth} ${state.graphHeight}`);
@@ -713,29 +1016,54 @@ function renderGraph() {
   refs.graphStage.style.height = `${state.graphHeight}px`;
   applyZoom();
 
-  const selected = state.snapshot.agents.find((agent) => agent.id === state.selectedId);
+  const selected = snapshot.agents.find((agent) => agent.id === state.selectedId);
   const related = selected ? lineageSet(selected.id) : new Set();
 
-  for (const edge of state.snapshot.edges) {
+  for (const [edgeIndex, edge] of snapshot.edges.entries()) {
     const from = state.positions.get(edge.parent_id);
     const to = state.positions.get(edge.child_id);
     if (!from || !to) continue;
-    const x1 = from.x + 224;
-    const y1 = from.y + 46;
-    const x2 = to.x;
-    const y2 = to.y + 46;
-    const bend = Math.max(52, (x2 - x1) * 0.48);
+    let pathData;
+    if (state.graphLayout === "horizontal") {
+      const x1 = from.x + state.nodeWidth / 2;
+      const y1 = from.y + state.nodeHeight;
+      const x2 = to.x + state.nodeWidth / 2;
+      const y2 = to.y;
+      const bend = Math.max(28, (y2 - y1) * 0.5);
+      pathData = `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
+    } else {
+      const x1 = from.x + state.nodeWidth;
+      const y1 = from.y + state.nodeHeight / 2;
+      const x2 = to.x;
+      const y2 = to.y + state.nodeHeight / 2;
+      const bend = Math.max(32, (x2 - x1) * 0.5);
+      pathData = `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
+    }
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+    path.setAttribute("d", pathData);
     path.classList.add("agent-edge");
+    path.style.setProperty("--edge-order", edgeIndex);
     if (edge.opaque) path.classList.add("opaque");
     if (related.has(edge.parent_id) && related.has(edge.child_id)) path.classList.add("selected-path");
-    const target = state.snapshot.agents.find((agent) => agent.id === edge.child_id);
+    const target = snapshot.agents.find((agent) => agent.id === edge.child_id);
     if (target?.status === "running") path.classList.add("active-flow");
     refs.edgeLayer.append(path);
+
+    if (target?.status === "running" || (related.has(edge.parent_id) && related.has(edge.child_id))) {
+      const packet = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      packet.setAttribute("r", target?.status === "running" ? "3.5" : "2.6");
+      packet.classList.add("edge-packet");
+      const motion = document.createElementNS("http://www.w3.org/2000/svg", "animateMotion");
+      motion.setAttribute("dur", target?.status === "running" ? "1.8s" : "3.2s");
+      motion.setAttribute("begin", `${edgeIndex * 0.22}s`);
+      motion.setAttribute("repeatCount", "indefinite");
+      motion.setAttribute("path", pathData);
+      packet.append(motion);
+      refs.edgeLayer.append(packet);
+    }
   }
 
-  for (const agent of state.snapshot.agents) {
+  for (const [agentIndex, agent] of snapshot.agents.entries()) {
     const position = state.positions.get(agent.id);
     const visualState = primaryState(agent);
     const meta = STATUS[visualState] ?? STATUS.unknown;
@@ -743,7 +1071,9 @@ function renderGraph() {
     const node = document.createElement("button");
     node.type = "button";
     node.className = `agent-node state-${visualState}`;
+    node.style.setProperty("--node-order", agentIndex);
     if (agent.id === state.selectedId) node.classList.add("selected");
+    if (agent.id === snapshot.root_session_id) node.classList.add("root-agent");
     if (!matches) node.classList.add("filtered-out");
     if (agent.detail_level === "opaque") node.classList.add("opaque");
     node.style.left = `${position.x}px`;
@@ -764,10 +1094,10 @@ function renderGraph() {
     duration.textContent = formatDuration(agent.started_at, agent.last_activity_at);
     const provider = document.createElement("span");
     provider.className = "node-provider";
-    provider.textContent = `${shortRuntime(state.snapshot.runtimes[0])} · ${agent.model ?? agent.provider ?? "unknown"}`;
+    provider.textContent = `${shortRuntime(snapshot.runtimes[0])} · ${agent.model ?? agent.provider ?? "unknown"}`;
     const activity = document.createElement("span");
     activity.className = "node-activity";
-    activity.textContent = agent.current_tool ?? lastTool(agent)?.name ?? agent.role ?? agent.mode;
+    activity.textContent = agent.role ?? agent.mode;
     const count = document.createElement("span");
     count.className = "node-count";
     count.textContent = agent.failed_tool_count
@@ -777,71 +1107,85 @@ function renderGraph() {
     evidence.className = "node-state-label";
     evidence.textContent = meta.label;
 
-    node.append(status, title, duration, provider, activity, count, evidence);
+    const toolTrail = document.createElement("span");
+    toolTrail.className = "node-tool-trail";
+    const recentTools = [...agent.tools].slice(-2).reverse();
+    if (recentTools.length === 0) {
+      const emptyTool = document.createElement("span");
+      emptyTool.className = "node-tool-row empty";
+      emptyTool.textContent = "· awaiting tool activity";
+      toolTrail.append(emptyTool);
+    } else {
+      for (const tool of recentTools) {
+        const toolState = tool.outcome ?? (tool.ended_at ? "succeeded" : "running");
+        const toolMeta = STATUS[toolState] ?? STATUS.unknown;
+        const row = document.createElement("span");
+        row.className = `node-tool-row state-${toolState}`;
+        const glyph = document.createElement("i");
+        glyph.textContent = toolMeta.glyph;
+        const name = document.createElement("b");
+        name.textContent = tool.name;
+        const time = document.createElement("time");
+        time.textContent = tool.duration_ms ? formatMillis(tool.duration_ms) : "LIVE";
+        row.append(glyph, name, time);
+        toolTrail.append(row);
+      }
+    }
+
+    node.append(status, title, duration, provider, activity, count, evidence, toolTrail);
     node.addEventListener("click", () => {
       state.selectedId = agent.id;
+      state.detailOpen = true;
       renderGraph();
       renderInspector();
     });
     refs.nodeLayer.append(node);
   }
+  renderMinimap(snapshot);
 }
 
 function renderInspector() {
-  if (!state.snapshot || !state.selectedId) return;
-  const agent = state.snapshot.agents.find((item) => item.id === state.selectedId);
-  if (!agent) return;
+  if (!state.snapshot || !state.selectedId || !state.detailOpen) {
+    refs.app.classList.remove("inspector-visible");
+    refs.inspectorContent.closest(".inspector")?.setAttribute("aria-hidden", "true");
+    refs.inspectorContent.hidden = true;
+    return;
+  }
+  const view = currentView();
+  const agent = view.agents.find((item) => item.id === state.selectedId);
+  if (!agent) {
+    closeAgentDetail();
+    return;
+  }
+  refs.app.classList.add("inspector-visible");
+  refs.inspectorContent.closest(".inspector")?.setAttribute("aria-hidden", "false");
   refs.inspectorEmpty.hidden = true;
   refs.inspectorContent.hidden = false;
   const visualState = primaryState(agent);
   const meta = STATUS[visualState] ?? STATUS.unknown;
-  const parent = state.snapshot.agents.find((item) => item.id === agent.parent_id);
-  const recentTools = [...agent.tools].reverse().slice(0, 4);
+  const events = agentEventsAtTime(state.snapshot, agent.id, state.timeCursorMs);
+  const contextEvents = events.filter((event) => ["prompt", "reasoning", "message", "error"].includes(event.kind));
+  const toolEvents = events.filter((event) => event.kind === "tool" || event.kind === "tool-result");
+  const parent = view.agents.find((item) => item.id === agent.parent_id);
 
   refs.inspectorContent.innerHTML = `
     <div class="inspector-header">
-      <span class="eyebrow">AGENT INSPECTOR</span>
-      <span class="detail-badge">${escapeHtml(agent.detail_level)}</span>
       <h1>${escapeHtml(agent.label)}</h1>
       <div class="inspector-state state-${escapeHtml(visualState)}">
-        <i class="status-symbol ${escapeHtml(visualState)}">${meta.glyph}</i>
-        <strong>${meta.label}</strong>
-        <span>${escapeHtml(agent.mode)}</span>
-        ${agent.outcome && agent.outcome !== visualState ? `<span>LAST ${escapeHtml(agent.outcome)}</span>` : ""}
+        <strong>${meta.label.toLowerCase()}</strong>
+        <span>${escapeHtml(agent.model ?? agent.provider ?? "model unknown")}</span>
       </div>
+      <div class="detail-metrics"><span>◷ ${formatDuration(agent.started_at, agent.last_activity_at)}</span><span>${agent.tool_count} tools</span><span>${agent.detail_level} evidence</span><span>parent ${escapeHtml(parent?.label ?? "root")}</span></div>
     </div>
-    <dl class="fact-grid">
-      <div><dt>ROLE</dt><dd>${escapeHtml(agent.role ?? "—")}</dd></div>
-      <div><dt>MODEL</dt><dd>${escapeHtml(agent.model ?? "—")}</dd></div>
-      <div><dt>PARENT</dt><dd>${escapeHtml(parent?.label ?? "ROOT")}</dd></div>
-      <div><dt>ACTIVATIONS</dt><dd>${agent.activations.length}</dd></div>
-      <div><dt>TOOL CALLS</dt><dd>${agent.tool_count}</dd></div>
-      <div><dt>FAILURES</dt><dd class="${agent.failed_tool_count ? "danger" : ""}">${agent.failed_tool_count}</dd></div>
-    </dl>
-    <section class="evidence-block">
-      <div class="section-title"><span>STATUS EVIDENCE</span><b>${agent.outcome ? "OUTCOME RECORDED" : "ACTIVITY ONLY"}</b></div>
-      <p>${escapeHtml(agent.outcome_evidence ?? `Latest runtime activity state is ${agent.status}; no terminal outcome was inferred.`)}</p>
+    <section class="detail-stream">
+      <div class="stream-divider"><span>triggered by</span></div>
+      ${contextEvents.length ? contextEvents.map(detailEventRow).join("") : `<p class="empty-copy">No prompt or response summary was captured before this time.</p>`}
+      <div class="stream-divider"><span>tool calls</span></div>
+      ${toolEvents.length ? toolEvents.map(detailEventRow).join("") : `<p class="empty-copy">No tool calls had started at this point.</p>`}
     </section>
-    <section class="tool-list">
-      <div class="section-title"><span>RECENT TOOLS</span><b>${agent.tools.length}</b></div>
-      ${
-        recentTools.length
-          ? recentTools
-              .map((tool) => {
-                const toolState = tool.outcome ?? (tool.ended_at ? "succeeded" : "running");
-                const toolMeta = STATUS[toolState] ?? STATUS.unknown;
-                return `<article class="tool-row">
-                  <i class="status-symbol ${toolState}">${toolMeta.glyph}</i>
-                  <div><strong>${escapeHtml(tool.name)}</strong><span>${escapeHtml(tool.input_summary ?? tool.output_summary ?? "No summary")}</span></div>
-                  <time>${tool.duration_ms ? formatMillis(tool.duration_ms) : "—"}</time>
-                </article>`;
-              })
-              .join("")
-          : `<p class="empty-copy">No tool calls recorded.</p>`
-      }
-    </section>
-    <section class="source-block">
-      <div class="section-title"><span>SOURCE IDENTITY</span></div>
+    <section class="detail-evidence">
+      <span>status evidence</span>
+      <p>${escapeHtml(agent.outcome_evidence ?? `Observed ${agent.status} activity at ${formatClock(state.timeCursorMs)}; no terminal outcome was present at this time.`)}</p>
       <code>${escapeHtml(agent.id)}</code>
     </section>
   `;
@@ -851,36 +1195,61 @@ function renderTimeline() {
   if (!state.snapshot) return;
   refs.timelineLanes.replaceChildren();
   refs.timelineRuler.replaceChildren();
-  const start = Date.parse(state.snapshot.started_at);
-  const end = Date.parse(state.snapshot.last_activity_at);
-  const span = Math.max(1, end - start);
-  refs.timelineRange.textContent = `${formatClock(start)} — ${formatClock(end)} · ${formatMillis(span)}`;
+  const bounds = timelineBounds(state.snapshot);
+  const cursor = clamp(state.timeCursorMs, bounds.start, bounds.end);
+  const cursorPercent = ((cursor - bounds.start) / bounds.span) * 100;
+  const view = currentView();
+  refs.timelineScroll.style.setProperty("--cursor-position", `${cursorPercent}%`);
+  refs.timelineRange.textContent = `+${formatMillis(cursor - bounds.start)} / ${formatMillis(bounds.span)}`;
+  refs.timelineCursor.textContent = formatClock(cursor);
+  refs.timelineDate.textContent = formatDate(cursor);
+  refs.timelineScrubber.value = String(Math.round((cursorPercent / 100) * 1000));
+  refs.cursorState.textContent = cursor >= bounds.end - 1 ? "LATEST STATE" : `HISTORY · ${formatClock(cursor)}`;
+  refs.footerStats.textContent = `${view.agents.length} agents · ${view.agents.reduce((sum, agent) => sum + agent.tool_count, 0)} tools`;
+  refs.timelinePlay.textContent = state.playbackFrame ? "Ⅱ PAUSE" : cursor >= bounds.end - 1 ? "↤ REPLAY" : "▶ PLAY";
 
-  for (let index = 0; index <= 4; index += 1) {
+  const latest = [...state.snapshot.timeline].reverse().find((item) => Date.parse(item.at) <= cursor);
+  refs.timelineEventTitle.textContent = latest
+    ? `${eventGlyph(latest.kind)} ${latest.label}`
+    : "Before the first observed agent event";
+
+  for (let index = 0; index <= 5; index += 1) {
     const tick = document.createElement("span");
-    tick.style.left = `${index * 25}%`;
-    tick.textContent = `+${formatMillis((span * index) / 4)}`;
+    tick.style.left = `${index * 20}%`;
+    const value = bounds.start + (bounds.span * index) / 5;
+    tick.innerHTML = `<b>${formatClock(value)}</b><small>+${formatMillis(value - bounds.start)}</small>`;
     refs.timelineRuler.append(tick);
   }
 
   for (const agent of state.snapshot.agents) {
-    const lane = document.createElement("button");
-    lane.type = "button";
-    lane.className = "timeline-lane";
+    const lane = document.createElement("div");
+    lane.className = "timeline-agent-lane";
+    if (!view.agents.some((item) => item.id === agent.id)) lane.classList.add("future");
     if (agent.id === state.selectedId) lane.classList.add("selected");
-    const label = document.createElement("span");
-    label.className = "lane-label";
-    label.textContent = agent.label;
-    const track = document.createElement("span");
-    track.className = "lane-track";
 
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "timeline-agent-label";
+    label.textContent = agent.label;
+    label.title = agent.label;
+    label.addEventListener("click", () => {
+      if (!view.agents.some((item) => item.id === agent.id)) return;
+      state.selectedId = agent.id;
+      state.detailOpen = true;
+      renderGraph();
+      renderInspector();
+      renderTimeline();
+    });
+
+    const track = document.createElement("div");
+    track.className = "timeline-event-track";
     for (const activation of agent.activations) {
       const block = intervalBlock(
         activation.started_at,
         activation.ended_at ?? state.snapshot.last_activity_at,
-        start,
-        span,
-        "activation-block",
+        bounds.start,
+        bounds.span,
+        `activity-range ${Date.parse(activation.started_at) <= cursor ? "elapsed" : "future"}`,
       );
       track.append(block);
     }
@@ -888,20 +1257,36 @@ function renderTimeline() {
       const block = intervalBlock(
         tool.started_at ?? tool.ended_at ?? agent.started_at,
         tool.ended_at ?? state.snapshot.last_activity_at,
-        start,
-        span,
-        `tool-block ${tool.outcome === "failed" ? "failed" : ""}`,
+        bounds.start,
+        bounds.span,
+        `tool-range ${tool.outcome === "failed" ? "failed" : ""} ${Date.parse(tool.started_at ?? tool.ended_at) <= cursor ? "elapsed" : "future"}`,
       );
       block.title = `${tool.name} · ${tool.outcome ?? "running"}`;
       track.append(block);
     }
+    for (const event of state.snapshot.timeline.filter((item) => item.session_id === agent.id)) {
+      const eventTime = Date.parse(event.at);
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = `timeline-event ${event.kind} ${eventTime <= cursor ? "elapsed" : "future"}`;
+      marker.style.left = `${clamp(((eventTime - bounds.start) / bounds.span) * 100, 0, 100)}%`;
+      marker.textContent = eventGlyph(event.kind);
+      marker.title = `${formatClock(eventTime)} · ${event.label}`;
+      marker.addEventListener("click", () => {
+        stopPlayback();
+        state.timeCursorMs = eventTime;
+        state.cursorPinned = eventTime < bounds.end - 1;
+        state.selectedId = event.session_id;
+        state.detailOpen = true;
+        render();
+      });
+      track.append(marker);
+    }
+    const laneCursor = document.createElement("i");
+    laneCursor.className = "timeline-lane-cursor";
+    laneCursor.style.left = `${cursorPercent}%`;
+    track.append(laneCursor);
     lane.append(label, track);
-    lane.addEventListener("click", () => {
-      state.selectedId = agent.id;
-      renderGraph();
-      renderInspector();
-      renderTimeline();
-    });
     refs.timelineLanes.append(lane);
   }
 }
@@ -916,6 +1301,112 @@ function intervalBlock(from, to, start, span, className) {
   return block;
 }
 
+function currentView() {
+  return snapshotAtTime(state.snapshot, state.timeCursorMs);
+}
+
+function closeAgentDetail() {
+  state.detailOpen = false;
+  refs.app.classList.remove("inspector-visible");
+  refs.inspectorContent.closest(".inspector")?.setAttribute("aria-hidden", "true");
+  refs.inspectorContent.hidden = true;
+  renderGraph();
+}
+
+function detailEventRow(event) {
+  const summary = event.input_summary ?? event.output_summary ?? event.label;
+  const kindLabel = event.kind === "reasoning" ? "thought summary" : event.kind.replace("-", " ");
+  const outcome = event.outcome ? `<em class="event-outcome ${escapeHtml(event.outcome)}">${escapeHtml(event.outcome)}</em>` : "";
+  const duration = event.duration_ms ? `<span>${formatMillis(event.duration_ms)}</span>` : "";
+  return `<article class="detail-event kind-${escapeHtml(event.kind)}">
+    <i>${eventGlyph(event.kind)}</i>
+    <b>${escapeHtml(kindLabel)}</b>
+    <p>${escapeHtml(summary)}</p>
+    ${outcome}${duration}<time>${formatClock(Date.parse(event.at))}</time>
+  </article>`;
+}
+
+function eventGlyph(kind) {
+  return kind === "prompt"
+    ? "↳"
+    : kind === "reasoning"
+      ? "↳"
+      : kind === "tool"
+        ? "⌛"
+        : kind === "tool-result"
+          ? "↳"
+          : kind === "outcome"
+            ? "✓"
+            : kind === "error"
+              ? "×"
+              : kind === "spawn"
+                ? "◆"
+                : "·";
+}
+
+function renderMinimap(snapshot) {
+  refs.graphMinimap.replaceChildren();
+  const frame = document.createElement("div");
+  frame.className = "minimap-frame";
+  for (const agent of snapshot.agents) {
+    const position = state.positions.get(agent.id);
+    if (!position) continue;
+    const dot = document.createElement("i");
+    dot.className = `mini-node state-${primaryState(agent)}`;
+    dot.style.left = `${clamp((position.x / state.graphWidth) * 100, 1, 96)}%`;
+    dot.style.top = `${clamp((position.y / state.graphHeight) * 100, 4, 92)}%`;
+    frame.append(dot);
+  }
+  const viewport = document.createElement("span");
+  viewport.className = "mini-viewport";
+  frame.append(viewport);
+  refs.graphMinimap.append(frame);
+}
+
+function togglePlayback() {
+  if (!state.snapshot) return;
+  if (state.playbackFrame) {
+    stopPlayback();
+    render();
+    return;
+  }
+  const bounds = timelineBounds(state.snapshot);
+  if (state.timeCursorMs >= bounds.end - 1) state.timeCursorMs = bounds.start;
+  state.cursorPinned = true;
+  state.playbackLastFrame = null;
+  state.playbackLastRender = null;
+  refs.app.classList.add("is-playing");
+  state.playbackFrame = requestAnimationFrame(playbackStep);
+  renderTimeline();
+}
+
+function playbackStep(now) {
+  if (!state.snapshot || !state.playbackFrame) return;
+  const bounds = timelineBounds(state.snapshot);
+  const elapsed = state.playbackLastFrame == null ? 0 : now - state.playbackLastFrame;
+  state.playbackLastFrame = now;
+  state.timeCursorMs = Math.min(bounds.end, state.timeCursorMs + elapsed);
+  if (state.playbackLastRender == null || now - state.playbackLastRender >= 45) {
+    state.playbackLastRender = now;
+    render();
+  }
+  if (state.timeCursorMs >= bounds.end) {
+    state.cursorPinned = false;
+    stopPlayback();
+    render();
+    return;
+  }
+  state.playbackFrame = requestAnimationFrame(playbackStep);
+}
+
+function stopPlayback() {
+  if (state.playbackFrame) cancelAnimationFrame(state.playbackFrame);
+  state.playbackFrame = null;
+  state.playbackLastFrame = null;
+  state.playbackLastRender = null;
+  refs.app.classList.remove("is-playing");
+}
+
 function lineageSet(id) {
   const set = new Set([id]);
   const byId = new Map(state.snapshot.agents.map((agent) => [agent.id, agent]));
@@ -924,6 +1415,14 @@ function lineageSet(id) {
     set.add(current.parent_id);
     current = byId.get(current.parent_id);
   }
+  const addDescendants = (parentId) => {
+    for (const agent of state.snapshot.agents) {
+      if (agent.parent_id !== parentId || set.has(agent.id)) continue;
+      set.add(agent.id);
+      addDescendants(agent.id);
+    }
+  };
+  addDescendants(id);
   return set;
 }
 
@@ -949,6 +1448,21 @@ function setZoom(value) {
   applyZoom();
 }
 
+function setGraphLayout(layout) {
+  state.graphLayout = layout === "vertical" ? "vertical" : "horizontal";
+  refs.app.dataset.graphLayout = state.graphLayout;
+  const horizontal = state.graphLayout === "horizontal";
+  refs.layoutHorizontal.classList.toggle("active", horizontal);
+  refs.layoutHorizontal.setAttribute("aria-pressed", String(horizontal));
+  refs.layoutVertical.classList.toggle("active", !horizontal);
+  refs.layoutVertical.setAttribute("aria-pressed", String(!horizontal));
+  if (!state.snapshot) return;
+  layoutGraph();
+  renderGraph();
+  renderInspector();
+  fitGraph();
+}
+
 function applyZoom() {
   refs.graphStage.style.transform = `scale(${state.zoom})`;
   refs.graphSpacer.style.width = `${state.graphWidth * state.zoom}px`;
@@ -957,8 +1471,8 @@ function applyZoom() {
 }
 
 function fitGraph() {
-  const widthRatio = (refs.graphViewport.clientWidth - 64) / state.graphWidth;
-  const heightRatio = (refs.graphViewport.clientHeight - 64) / state.graphHeight;
+  const widthRatio = (refs.graphViewport.clientWidth - 40) / state.graphWidth;
+  const heightRatio = (refs.graphViewport.clientHeight - 30) / state.graphHeight;
   setZoom(Math.min(widthRatio, heightRatio, 1.2));
   refs.graphViewport.scrollTo({ left: 0, top: 0, behavior: "smooth" });
 }
@@ -1008,6 +1522,14 @@ function formatClock(value) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+  }).format(value);
+}
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
   }).format(value);
 }
 

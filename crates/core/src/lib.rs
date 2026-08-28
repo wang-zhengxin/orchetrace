@@ -400,7 +400,11 @@ fn apply_event(
                 data_string(&event.data, "summary").unwrap_or_else(|| "assistant response".into());
             push_timeline(timeline, event, "message", &label, None);
         }
-        EventType::AssistantReasoningSummary => {}
+        EventType::AssistantReasoningSummary => {
+            let label = data_string(&event.data, "summary")
+                .unwrap_or_else(|| "reasoning summary available".into());
+            push_timeline(timeline, event, "reasoning", &label, None);
+        }
         EventType::ToolStarted => {
             let call_id = required_string(event, "call_id")?;
             let name = required_string(event, "name")?;
@@ -848,5 +852,23 @@ mod tests {
         assert_eq!(agents[worker].tool_count, 1);
         assert_eq!(agents[reviewer].parent_id.as_deref(), Some(worker));
         assert_eq!(agents[reviewer].outcome, Some(TerminalOutcome::Failed));
+    }
+
+    #[test]
+    fn reasoning_summary_is_available_as_redacted_timeline_evidence() {
+        let snapshot = fold_events([event(
+            "reasoning",
+            "root",
+            None,
+            0,
+            "2026-08-25T00:00:00Z",
+            EventType::AssistantReasoningSummary,
+            json!({"summary":"Verified the dependency boundary."}),
+        )])
+        .unwrap();
+
+        assert!(snapshot.timeline.iter().any(|entry| {
+            entry.kind == "reasoning" && entry.label == "Verified the dependency boundary."
+        }));
     }
 }

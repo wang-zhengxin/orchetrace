@@ -4,7 +4,7 @@
   "runtimes": [
     "deepseek-harness"
   ],
-  "event_count": 46,
+  "event_count": 79,
   "started_at": "2026-08-25T02:00:00.000Z",
   "last_activity_at": "2026-08-25T02:00:09.300Z",
   "agents": [
@@ -95,6 +95,44 @@
       ]
     },
     {
+      "id": "agent-ui",
+      "parent_id": "run-root",
+      "label": "interface observer",
+      "role": "ux",
+      "mode": "continuable",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4",
+      "detail_level": "full",
+      "status": "ready",
+      "outcome": "succeeded",
+      "outcome_evidence": "visual hierarchy and interaction targets passed review",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:05.250Z",
+      "last_activity_at": "2026-08-25T02:00:06.550Z",
+      "activations": [
+        {
+          "id": "ui-a1",
+          "started_at": "2026-08-25T02:00:05.280Z",
+          "ended_at": "2026-08-25T02:00:06.550Z",
+          "end_status": "ready"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "inspect-layout",
+          "name": "ui_inspect",
+          "started_at": "2026-08-25T02:00:05.450Z",
+          "ended_at": "2026-08-25T02:00:06.200Z",
+          "outcome": "succeeded",
+          "duration_ms": 750,
+          "input_summary": "{\"viewport\":\"1280x720\"}",
+          "output_summary": "Hierarchy remains readable at the target viewport."
+        }
+      ]
+    },
+    {
       "id": "agent-builder",
       "parent_id": "run-root",
       "label": "core builder",
@@ -179,12 +217,144 @@
           "output_summary": "Append-only events use seq and time; persistence exposes inspect and readFrom."
         }
       ]
+    },
+    {
+      "id": "agent-storage",
+      "parent_id": "agent-research",
+      "label": "storage analyst",
+      "role": "data",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "storage invariants verified against the local event index",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:04.060Z",
+      "last_activity_at": "2026-08-25T02:00:04.700Z",
+      "activations": [
+        {
+          "id": "storage-a1",
+          "started_at": "2026-08-25T02:00:04.080Z",
+          "ended_at": "2026-08-25T02:00:04.700Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "inspect-store",
+          "name": "sqlite_inspect",
+          "started_at": "2026-08-25T02:00:04.200Z",
+          "ended_at": "2026-08-25T02:00:04.600Z",
+          "outcome": "succeeded",
+          "duration_ms": 400,
+          "input_summary": "{\"table\":\"canonical_events\"}",
+          "output_summary": "Indexes and event identity constraints verified."
+        }
+      ]
+    },
+    {
+      "id": "agent-motion",
+      "parent_id": "agent-ui",
+      "label": "motion observer",
+      "role": "animation",
+      "mode": "continuable",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "running",
+      "outcome": null,
+      "outcome_evidence": null,
+      "current_tool": "browser_trace",
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:05.600Z",
+      "last_activity_at": "2026-08-25T02:00:05.800Z",
+      "activations": [
+        {
+          "id": "motion-a1",
+          "started_at": "2026-08-25T02:00:05.620Z",
+          "ended_at": null,
+          "end_status": null
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "trace-motion",
+          "name": "browser_trace",
+          "started_at": "2026-08-25T02:00:05.800Z",
+          "ended_at": null,
+          "outcome": null,
+          "duration_ms": null,
+          "input_summary": "{\"target\":\"topology-motion\"}",
+          "output_summary": null
+        }
+      ]
+    },
+    {
+      "id": "agent-tests",
+      "parent_id": "agent-builder",
+      "label": "test runner",
+      "role": "verification",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "verification matrix completed without failures",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:06.950Z",
+      "last_activity_at": "2026-08-25T02:00:07.900Z",
+      "activations": [
+        {
+          "id": "tests-a1",
+          "started_at": "2026-08-25T02:00:06.970Z",
+          "ended_at": "2026-08-25T02:00:07.900Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "run-matrix",
+          "name": "bash",
+          "started_at": "2026-08-25T02:00:07.100Z",
+          "ended_at": "2026-08-25T02:00:07.800Z",
+          "outcome": "succeeded",
+          "duration_ms": 700,
+          "input_summary": "npm run check",
+          "output_summary": "Adapter and web verification matrix passed."
+        }
+      ]
     }
   ],
   "edges": [
     {
+      "parent_id": "agent-builder",
+      "child_id": "agent-tests",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
       "parent_id": "agent-research",
       "child_id": "agent-docs",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-research",
+      "child_id": "agent-storage",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-ui",
+      "child_id": "agent-motion",
       "relation": "delegate",
       "opaque": false
     },
@@ -197,6 +367,12 @@
     {
       "parent_id": "run-root",
       "child_id": "agent-research",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "run-root",
+      "child_id": "agent-ui",
       "relation": "delegate",
       "opaque": false
     }
@@ -315,10 +491,52 @@
       "outcome": "succeeded"
     },
     {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.060Z",
+      "kind": "spawn",
+      "label": "storage analyst",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.080Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.120Z",
+      "kind": "prompt",
+      "label": "Verify snapshot indexing and local persistence invariants.",
+      "outcome": null
+    },
+    {
       "session_id": "agent-research",
       "at": "2026-08-25T02:00:04.200Z",
       "kind": "tool-result",
       "label": "delegate_task",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.200Z",
+      "kind": "tool",
+      "label": "sqlite_inspect",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.600Z",
+      "kind": "tool-result",
+      "label": "sqlite_inspect",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-storage",
+      "at": "2026-08-25T02:00:04.650Z",
+      "kind": "outcome",
+      "label": "agent outcome",
       "outcome": "succeeded"
     },
     {
@@ -343,10 +561,38 @@
       "outcome": "succeeded"
     },
     {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:05.250Z",
+      "kind": "spawn",
+      "label": "interface observer",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:05.280Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:05.320Z",
+      "kind": "prompt",
+      "label": "Audit topology readability and motion feedback under concurrent activity.",
+      "outcome": null
+    },
+    {
       "session_id": "run-root",
       "at": "2026-08-25T02:00:05.400Z",
       "kind": "tool",
       "label": "delegate_task",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:05.450Z",
+      "kind": "tool",
+      "label": "ui_inspect",
       "outcome": null
     },
     {
@@ -357,10 +603,31 @@
       "outcome": null
     },
     {
+      "session_id": "agent-motion",
+      "at": "2026-08-25T02:00:05.600Z",
+      "kind": "spawn",
+      "label": "motion observer",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-motion",
+      "at": "2026-08-25T02:00:05.620Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
       "session_id": "agent-builder",
       "at": "2026-08-25T02:00:05.650Z",
       "kind": "activation",
       "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-motion",
+      "at": "2026-08-25T02:00:05.660Z",
+      "kind": "prompt",
+      "label": "Observe edge packets, node pulses, and replay playhead continuity.",
       "outcome": null
     },
     {
@@ -371,11 +638,32 @@
       "outcome": null
     },
     {
+      "session_id": "agent-motion",
+      "at": "2026-08-25T02:00:05.800Z",
+      "kind": "tool",
+      "label": "browser_trace",
+      "outcome": null
+    },
+    {
       "session_id": "agent-builder",
       "at": "2026-08-25T02:00:06.000Z",
       "kind": "tool",
       "label": "str_replace_editor",
       "outcome": null
+    },
+    {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:06.200Z",
+      "kind": "tool-result",
+      "label": "ui_inspect",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-ui",
+      "at": "2026-08-25T02:00:06.500Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
     },
     {
       "session_id": "agent-builder",
@@ -385,11 +673,53 @@
       "outcome": "succeeded"
     },
     {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:06.950Z",
+      "kind": "spawn",
+      "label": "test runner",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:06.970Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:07.000Z",
+      "kind": "prompt",
+      "label": "Run the protocol and adapter verification matrix.",
+      "outcome": null
+    },
+    {
       "session_id": "agent-builder",
       "at": "2026-08-25T02:00:07.100Z",
       "kind": "tool",
       "label": "bash",
       "outcome": null
+    },
+    {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:07.100Z",
+      "kind": "tool",
+      "label": "bash",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:07.800Z",
+      "kind": "tool-result",
+      "label": "bash",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-tests",
+      "at": "2026-08-25T02:00:07.850Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
     },
     {
       "session_id": "agent-builder",

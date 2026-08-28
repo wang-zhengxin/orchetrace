@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "bin": {
+    "orchetrace-dsh-auto": "./src/auto-cli.ts"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=0.1.0"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "fixture": "node src/generate-fixture.ts"
+    "fixture": "node src/generate-fixture.ts",
+    "auto": "node src/auto-cli.ts"
   }
 }
