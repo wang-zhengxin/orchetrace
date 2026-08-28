@@ -8,7 +8,10 @@ use std::{
 use chrono::{DateTime, Local};
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -24,6 +27,11 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+
+#[path = "orche_managed.rs"]
+mod managed;
+
+use managed::ManagedObservers;
 
 const ACCENT: Color = Color::Rgb(228, 185, 0);
 const GREEN: Color = Color::Rgb(112, 217, 130);
@@ -46,11 +54,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let data_dir = args.data_dir.unwrap_or_else(discover_data_dir);
-    let mut app = App::load(data_dir, args.run_id, args.refresh)?;
+    let observers = if args.replay_only {
+        ManagedObservers::disabled()
+    } else {
+        ManagedObservers::start(&data_dir)
+    };
+    let mut app = App::load(
+        data_dir,
+        args.run_id,
+        args.refresh,
+        observers.summary.clone(),
+    )?;
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
     let _session = TerminalSession;
+    let _observers = observers;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
 
@@ -58,10 +77,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         terminal.draw(|frame| draw(frame, &app))?;
         let wait = Duration::from_millis(45);
         if event::poll(wait)? {
-            if let Event::Key(key) = event::read()?
-                && key.kind != KeyEventKind::Release
-            {
-                app.on_key(key)?;
+            match event::read()? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => app.on_key(key)?,
+                Event::Mouse(mouse) => {
+                    let size = terminal.size()?;
+                    app.on_mouse(mouse, Rect::new(0, 0, size.width, size.height));
+                }
+                _ => {}
             }
         }
         app.tick()?;
@@ -74,7 +96,12 @@ struct TerminalSession;
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            Show,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -83,6 +110,7 @@ struct Args {
     data_dir: Option<PathBuf>,
     run_id: Option<String>,
     refresh: Duration,
+    replay_only: bool,
     help: bool,
 }
 
@@ -108,6 +136,7 @@ impl Args {
                         .map_err(|_| "--refresh-ms must be an integer")?;
                     parsed.refresh = Duration::from_millis(value.clamp(100, 10_000));
                 }
+                "--replay" | "--no-observe" => parsed.replay_only = true,
                 "--help" | "-h" => parsed.help = true,
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
@@ -119,11 +148,13 @@ impl Args {
 fn print_help() {
     println!(
         "orche — terminal multi-Agent observer\n\n\
-         Usage: orche [--data-dir PATH] [--run RUN_ID] [--refresh-ms 500]\n\n\
+         Usage: orche [--data-dir PATH] [--run RUN_ID] [--refresh-ms 500] [--replay]\n\n\
+         By default, orche starts the local ingest service and passively observes\n\
+         current Claude, Pi, and DeepSeek Harness sessions. --replay disables it.\n\n\
          Keys:\n\
            q              quit\n\
            ↑/↓ or j/k     select Agent\n\
-           Enter          open/close Agent detail\n\
+           Enter/click    open/close Agent detail\n\
            ←/→ or h/l     scrub real timeline\n\
            Home/End       first/latest state\n\
            Space          play/pause at 1× real time\n\
@@ -150,6 +181,8 @@ struct App {
     last_refresh: Instant,
     last_tick: Instant,
     notice: String,
+    observer_status: String,
+    auto_run: bool,
 }
 
 impl App {
@@ -157,23 +190,17 @@ impl App {
         data_dir: PathBuf,
         requested_run: Option<String>,
         refresh: Duration,
+        observer_status: String,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let catalog = read_catalog(&data_dir)?;
         if catalog.runs.is_empty() {
             return Err(format!("{} contains no runs", data_dir.display()).into());
         }
+        let auto_run = requested_run.is_none();
         let run_index = requested_run
             .as_deref()
             .and_then(|id| catalog.runs.iter().position(|run| run.run_id == id))
-            .or_else(|| {
-                catalog
-                    .runs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, run)| run.source_id == "local-demo")
-                    .max_by_key(|(_, run)| (run.agent_count, run.event_count))
-                    .map(|(index, _)| index)
-            })
+            .or_else(|| most_recent_run_index(&catalog))
             .unwrap_or(0);
         let snapshot = read_snapshot(&data_dir, &catalog.runs[run_index].run_id)?;
         let (_, end) = snapshot_bounds(&snapshot);
@@ -194,6 +221,8 @@ impl App {
             last_refresh: Instant::now(),
             last_tick: Instant::now(),
             notice: "LIVE FOLLOW".into(),
+            observer_status,
+            auto_run,
         })
     }
 
@@ -230,6 +259,7 @@ impl App {
             KeyCode::Char('f') => {
                 self.follow_latest = !self.follow_latest;
                 if self.follow_latest {
+                    self.auto_run = true;
                     self.jump(true);
                 }
                 self.notice = if self.follow_latest {
@@ -244,6 +274,50 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn on_mouse(&mut self, mouse: MouseEvent, area: Rect) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.select_delta(-1);
+                return;
+            }
+            MouseEventKind::ScrollDown => {
+                self.select_delta(1);
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {}
+            _ => return,
+        }
+        if self.help_open {
+            self.help_open = false;
+            return;
+        }
+        let Some((_, graph, timeline, _)) = screen_regions(area, self.snapshot.agents.len()) else {
+            return;
+        };
+        let agents = self.visible_agents();
+        let inner = graph.inner(ratatui::layout::Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
+        let positions = graph_positions(&agents, inner);
+        if let Some(agent) = agents.iter().find(|agent| {
+            positions
+                .get(&agent.id)
+                .is_some_and(|rect| contains(*rect, mouse.column, mouse.row))
+        }) {
+            self.selected_id.clone_from(&agent.id);
+            self.detail_open = true;
+            return;
+        }
+        if contains(timeline, mouse.column, mouse.row) {
+            self.seek_timeline(mouse.column, mouse.row, timeline);
+            return;
+        }
+        if self.detail_open && contains(graph, mouse.column, mouse.row) {
+            self.detail_open = false;
+        }
     }
 
     fn tick(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -270,17 +344,26 @@ impl App {
     fn reload(&mut self, manual: bool) -> Result<(), Box<dyn std::error::Error>> {
         let catalog = read_catalog(&self.data_dir)?;
         let current_id = self.summary().run_id.clone();
-        self.run_index = catalog
-            .runs
-            .iter()
-            .position(|run| run.run_id == current_id)
-            .unwrap_or(0);
+        let next_index = if self.auto_run && self.follow_latest {
+            most_recent_run_index(&catalog)
+        } else {
+            catalog.runs.iter().position(|run| run.run_id == current_id)
+        }
+        .unwrap_or(0);
+        let run_changed = catalog.runs[next_index].run_id != current_id;
+        self.run_index = next_index;
         let summary = &catalog.runs[self.run_index];
-        let changed = summary.event_count != self.snapshot.event_count
+        let changed = run_changed
+            || summary.event_count != self.snapshot.event_count
             || summary.last_activity_at != self.snapshot.last_activity_at;
         self.catalog = catalog;
         if changed || manual {
             self.snapshot = read_snapshot(&self.data_dir, &self.summary().run_id)?;
+            if run_changed {
+                self.selected_id.clone_from(&self.snapshot.root_session_id);
+                self.detail_open = false;
+                self.notice = format!("LIVE {}", runtime_label(self.summary()));
+            }
             if self.follow_latest {
                 self.cursor_ms = snapshot_bounds(&self.snapshot).1;
             }
@@ -301,6 +384,7 @@ impl App {
         self.playing = false;
         self.follow_latest = true;
         self.detail_open = false;
+        self.auto_run = false;
         self.notice = format!("RUN {}/{}", self.run_index + 1, self.catalog.runs.len());
         Ok(())
     }
@@ -337,6 +421,9 @@ impl App {
         self.cursor_ms = if end { bounds.1 } else { bounds.0 };
         self.playing = false;
         self.follow_latest = end;
+        if end {
+            self.auto_run = true;
+        }
         self.ensure_selection_visible();
     }
 
@@ -366,6 +453,65 @@ impl App {
             self.detail_open = false;
         }
     }
+
+    fn seek_timeline(&mut self, column: u16, row: u16, area: Rect) {
+        let block = Block::default().borders(Borders::TOP);
+        let inner = block.inner(area);
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+        let label_width = 14_u16.min(inner.width / 3);
+        let track_x = inner.x + label_width;
+        let track_width = inner.width.saturating_sub(label_width + 1).max(1);
+        if column >= track_x && column < track_x + track_width {
+            let (start, end) = snapshot_bounds(&self.snapshot);
+            let offset = column.saturating_sub(track_x) as i64;
+            self.cursor_ms =
+                start + offset * (end - start) / track_width.saturating_sub(1).max(1) as i64;
+            self.playing = false;
+            self.follow_latest = self.cursor_ms >= end;
+            self.auto_run = self.follow_latest;
+            self.notice = if self.follow_latest {
+                "LATEST STATE".into()
+            } else {
+                "HISTORY PINNED".into()
+            };
+            self.ensure_selection_visible();
+        }
+        if row >= inner.y && row < inner.bottom() {
+            let max_lanes = inner.height as usize;
+            let selected_index = self
+                .snapshot
+                .agents
+                .iter()
+                .position(|agent| agent.id == self.selected_id)
+                .unwrap_or(0);
+            let offset = selected_index
+                .saturating_sub(max_lanes.saturating_sub(1))
+                .min(self.snapshot.agents.len().saturating_sub(max_lanes));
+            if let Some(agent) = self
+                .snapshot
+                .agents
+                .get(offset + row.saturating_sub(inner.y) as usize)
+            {
+                self.selected_id.clone_from(&agent.id);
+            }
+        }
+    }
+}
+
+fn most_recent_run_index(catalog: &RunCatalog) -> Option<usize> {
+    catalog
+        .runs
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, run)| {
+            (
+                parse_ms(run.last_activity_at.as_deref()).unwrap_or(i64::MIN),
+                run.event_count,
+            )
+        })
+        .map(|(index, _)| index)
 }
 
 fn discover_data_dir() -> PathBuf {
@@ -515,7 +661,8 @@ fn tool_start(tool: &ToolSnapshot, agent: &AgentSnapshot) -> Option<i64> {
 
 fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    if area.width < 64 || area.height < 20 {
+    let Some((header, graph, timeline, footer)) = screen_regions(area, app.snapshot.agents.len())
+    else {
         frame.render_widget(
             Paragraph::new("orche needs at least 64×20 terminal cells")
                 .style(Style::default().fg(ACCENT))
@@ -523,8 +670,24 @@ fn draw(frame: &mut Frame, app: &App) {
             area,
         );
         return;
+    };
+    draw_header(frame, header, app);
+    draw_graph(frame, graph, app);
+    draw_timeline(frame, timeline, app);
+    draw_footer(frame, footer, app);
+    if app.detail_open {
+        draw_detail(frame, graph, app);
     }
-    let timeline_height = (app.snapshot.agents.len() as u16 + 4).clamp(7, (area.height / 3).max(7));
+    if app.help_open {
+        draw_help(frame, area);
+    }
+}
+
+fn screen_regions(area: Rect, agent_count: usize) -> Option<(Rect, Rect, Rect, Rect)> {
+    if area.width < 64 || area.height < 20 {
+        return None;
+    }
+    let timeline_height = (agent_count as u16 + 4).clamp(7, (area.height / 3).max(7));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -534,16 +697,11 @@ fn draw(frame: &mut Frame, app: &App) {
             Constraint::Length(1),
         ])
         .split(area);
-    draw_header(frame, chunks[0], app);
-    draw_graph(frame, chunks[1], app);
-    draw_timeline(frame, chunks[2], app);
-    draw_footer(frame, chunks[3], app);
-    if app.detail_open {
-        draw_detail(frame, chunks[1], app);
-    }
-    if app.help_open {
-        draw_help(frame, area);
-    }
+    Some((chunks[0], chunks[1], chunks[2], chunks[3]))
+}
+
+fn contains(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -648,6 +806,79 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &App) {
                     .style(Style::default().bg(PANEL)),
             ),
             rect,
+        );
+    }
+    draw_minimap(frame, inner, &agents, &positions, &app.selected_id);
+}
+
+fn draw_minimap(
+    frame: &mut Frame,
+    graph: Rect,
+    agents: &[AgentSnapshot],
+    positions: &BTreeMap<String, Rect>,
+    selected_id: &str,
+) {
+    if graph.width < 36 || graph.height < 8 {
+        return;
+    }
+    let width = (graph.width / 5).clamp(18, 28);
+    let height = (graph.height / 3).clamp(6, 9);
+    let area = Rect::new(graph.right().saturating_sub(width), graph.y, width, height);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" map ")
+        .title_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(Color::Rgb(58, 60, 55)))
+        .style(Style::default().bg(PANEL));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let mut mini = BTreeMap::new();
+    for agent in agents {
+        let Some(card) = positions.get(&agent.id) else {
+            continue;
+        };
+        let center_x = card.x + card.width / 2;
+        let center_y = card.y + card.height / 2;
+        let x = inner.x
+            + center_x.saturating_sub(graph.x) * inner.width.saturating_sub(1) / graph.width.max(1);
+        let y = inner.y
+            + center_y.saturating_sub(graph.y) * inner.height.saturating_sub(1)
+                / graph.height.max(1);
+        mini.insert(agent.id.clone(), (x, y));
+    }
+    for agent in agents {
+        let (Some(parent_id), Some(&(x2, y2))) = (&agent.parent_id, mini.get(&agent.id)) else {
+            continue;
+        };
+        let Some(&(x1, y1)) = mini.get(parent_id) else {
+            continue;
+        };
+        for x in x1.min(x2)..=x1.max(x2) {
+            put(frame.buffer_mut(), x, y1, '·', Style::default().fg(GREEN));
+        }
+        for y in y1.min(y2)..=y1.max(y2) {
+            put(frame.buffer_mut(), x2, y, '·', Style::default().fg(GREEN));
+        }
+    }
+    for agent in agents {
+        let Some(&(x, y)) = mini.get(&agent.id) else {
+            continue;
+        };
+        let selected = agent.id == selected_id;
+        put(
+            frame.buffer_mut(),
+            x,
+            y,
+            if selected { '◆' } else { '■' },
+            Style::default().fg(if selected {
+                ACCENT
+            } else {
+                state_color(agent_state(agent))
+            }),
         );
     }
 }
@@ -904,7 +1135,13 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(MUTED),
         ),
         Span::styled(
-            "↑↓ select · Enter detail · ←→ time · Space play · [ ] run · f follow · ? help · q quit",
+            truncate(
+                &format!(
+                    "{} · click/Enter detail · ←→ time · Space play · [ ] run · f live · q quit",
+                    app.observer_status
+                ),
+                area.width.saturating_sub(28) as usize,
+            ),
             Style::default().fg(MUTED),
         ),
     ]);
@@ -1023,7 +1260,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(
-            "↑/↓  select Agent\nEnter open/close detail\n←/→  move real-time cursor\nHome/End first/latest state\nSpace play/pause at 1×\n[ / ] previous/next run\nf     follow latest snapshot\nr     reload from disk\nq     quit\n\nPress any key to close",
+            "Click select Agent and open detail\nClick timeline to seek real time\n↑/↓  select Agent\nEnter open/close detail\n←/→  move real-time cursor\nHome/End first/latest state\nSpace play/pause at 1×\n[ / ] previous/next run\nf     follow newest live run\nr     reload from disk\nq     quit\n\nPress any key to close",
         )
         .style(Style::default().fg(TEXT))
         .block(

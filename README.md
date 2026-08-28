@@ -89,11 +89,13 @@ cargo install --path crates/cli --bin orche
 orche
 ```
 
-`orche` 会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
+`orche` 默认会启动本机 Ingest，并被动观察当前及后续打开的 Claude Code、Pi 和 DeepSeek Harness 会话；无需另外启动桌面端或 watcher。它会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
 
 ```bash
 orche --data-dir /path/to/orchetrace/data
 ```
+
+节点支持鼠标单击，点击后从右侧打开真实 prompt、reasoning、message、tool 与 outcome 详情；右上角 `map` 是随历史时间游标同步变化的拓扑缩略图，底部时间轴也可以直接点击定位。仅查看已有快照、不启动观察器时使用 `orche --replay`。
 
 主要快捷键：
 
