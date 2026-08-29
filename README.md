@@ -91,7 +91,7 @@ npm run tui
 安装为全局命令后，可以在任意目录直接执行 `orche`：
 
 ```bash
-cargo install --path crates/cli --bin orche
+cargo install --path crates/cli --bins
 orche
 ```
 
@@ -102,6 +102,18 @@ orche --data-dir /path/to/orchetrace/data
 ```
 
 节点支持鼠标单击，点击后从右侧打开真实 prompt、reasoning、message、tool 与 outcome 详情；右上角 `map` 是随历史时间游标同步变化的拓扑缩略图，底部时间轴也可以直接点击定位。仅查看已有快照、不启动观察器时使用 `orche --replay`。
+
+受控环境可使用默认 `standard` 模式，它保留摘要和工具证据，但会递归遮蔽常见 token、password、authorization、cookie、private key 等字段。敏感环境建议只记录运行元数据，并设置自动保留边界：
+
+```bash
+export ORCHETRACE_PRIVACY_MODE=metadata-only
+export ORCHETRACE_REDACT_KEYS=customer_id,workspace_id
+export ORCHETRACE_RETENTION_DAYS=30
+export ORCHETRACE_MAX_EVENTS=100000
+orche
+```
+
+`metadata-only` 仍保留 Agent 拓扑、状态、模型、工具名称、耗时和终态，但将 prompt、message、reasoning、arguments、路径与证据正文替换为 `[OMITTED]`。`ORCHETRACE_REDACT_KEYS` 接受逗号分隔的自定义字段名。
 
 主要快捷键：
 
@@ -124,7 +136,10 @@ cargo run -q -p orchetrace-cli --bin otrace -- \
   --live-listen 127.0.0.1:43118 \
   --web-origin http://127.0.0.1:4173 \
   --db .orchetrace/orchetrace.db \
-  --data-dir apps/web/public/data
+  --data-dir apps/web/public/data \
+  --privacy-mode standard \
+  --retention-days 30 \
+  --max-events 100000
 
 npm run dev:web
 ```
@@ -284,9 +299,38 @@ scripts/                      开发、smoke 和性能脚本
 - transcript 和工具内容不上传到远程服务；
 - Live token 为每次启动生成的临时值；
 - `live-config.json` 在 Unix 上使用 `0600` 权限；
+- Ingest 在写入内存拓扑、SQLite、JSON mirror 前执行递归字段脱敏；
+- `metadata-only` 模式可以完全关闭 prompt、回答、reasoning、工具参数和路径正文采集；
+- 保留策略按完整 Run 删除旧事件，避免留下孤立子 Agent；
+- 删除任意 Session 时会级联删除所有后代 Session，并使派生 checkpoint 失效；
 - 数据库、游标、token 配置和本地设计资料均被 Git 忽略。
 
-当前 Alpha 尚未实现完整的字段遮蔽、内容 blob、级联删除和数据保留策略。在这些能力完成前，请不要将未审查的敏感 transcript 或数据库提交到代码仓库。
+已有数据库可以在停止 Ingest 后执行一次性清理；传入 `--data-dir` 会同时重建 Web/TUI 派生快照：
+
+```bash
+# 将已有事件改写为仅元数据
+otrace scrub \
+  --db /path/to/orchetrace.db \
+  --data-dir /path/to/data \
+  --privacy-mode metadata-only
+
+# 删除一个 Session 及全部子 Agent
+otrace delete-session \
+  --db /path/to/orchetrace.db \
+  --data-dir /path/to/data \
+  --runtime claude-code \
+  --source-id my-workspace \
+  --session-id session-id
+
+# 删除 30 天前的完整 Run，并限制最多 100000 个事件
+otrace prune \
+  --db /path/to/orchetrace.db \
+  --data-dir /path/to/data \
+  --older-than-days 30 \
+  --max-events 100000
+```
+
+`serve --retention-days/--max-events` 会在启动时执行相同清理。当前 Alpha 尚未实现独立加密 content blob；在该能力完成前，仍不要将未审查的 transcript 或数据库提交到代码仓库。
 
 ## 当前限制
 

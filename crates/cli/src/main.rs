@@ -11,10 +11,11 @@ use std::{
     time::Duration,
 };
 
+use chrono::{SecondsFormat, TimeDelta, Utc};
 use orchetrace_core::fold_events;
 use orchetrace_ingest::{IngestStore, RunCatalog, RunSnapshotDelta, RunState};
-use orchetrace_protocol::CanonicalEvent;
-use orchetrace_storage::{EventStore, InsertOutcome};
+use orchetrace_protocol::{CanonicalEvent, CaptureMode, PrivacyPolicy, RuntimeKind};
+use orchetrace_storage::{EventStore, InsertOutcome, RetentionPolicy};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -34,6 +35,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match args.next().as_deref() {
         Some("fold") => fold_command(args.collect()),
         Some("serve") => serve_command(args.collect()),
+        Some("scrub") => scrub_command(args.collect()),
+        Some("delete-session") => delete_session_command(args.collect()),
+        Some("prune") => prune_command(args.collect()),
         Some(command) => {
             print_usage();
             Err(format!("unknown command `{command}`").into())
@@ -43,6 +47,133 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     }
+}
+
+fn scrub_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut data_dir = None;
+    let mut capture_mode = CaptureMode::MetadataOnly;
+    let mut sensitive_keys = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--data-dir" => {
+                data_dir = Some(PathBuf::from(args.next().ok_or("missing --data-dir path")?))
+            }
+            "--privacy-mode" => {
+                capture_mode =
+                    parse_capture_mode(&args.next().ok_or("missing --privacy-mode value")?)?
+            }
+            "--redact-key" => sensitive_keys.push(args.next().ok_or("missing --redact-key value")?),
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let policy = privacy_policy(capture_mode, sensitive_keys);
+    let mut storage = EventStore::open(&database_path)?;
+    let outcome = storage.scrub(&policy)?;
+    if let Some(data_dir) = data_dir {
+        refresh_projection(&mut storage, &data_dir)?;
+    }
+    println!(
+        "scrubbed {} events: {} redacted fields, {} omitted fields ({})",
+        outcome.updated_events,
+        outcome.redacted_fields,
+        outcome.omitted_fields,
+        capture_mode.as_str()
+    );
+    Ok(())
+}
+
+fn delete_session_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut data_dir = None;
+    let mut runtime = None;
+    let mut source_id = None;
+    let mut session_id = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--data-dir" => {
+                data_dir = Some(PathBuf::from(args.next().ok_or("missing --data-dir path")?))
+            }
+            "--runtime" => {
+                runtime = Some(parse_runtime(
+                    &args.next().ok_or("missing --runtime value")?,
+                )?)
+            }
+            "--source-id" => source_id = Some(args.next().ok_or("missing --source-id value")?),
+            "--session-id" => session_id = Some(args.next().ok_or("missing --session-id value")?),
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let runtime = runtime.ok_or("delete-session requires --runtime")?;
+    let source_id = source_id.ok_or("delete-session requires --source-id")?;
+    let session_id = session_id.ok_or("delete-session requires --session-id")?;
+    let mut storage = EventStore::open(&database_path)?;
+    let outcome = storage.delete_session_tree(&runtime, &source_id, &session_id)?;
+    if let Some(data_dir) = data_dir {
+        refresh_projection(&mut storage, &data_dir)?;
+    }
+    println!(
+        "deleted {} events across {} sessions from {}",
+        outcome.deleted_events,
+        outcome.deleted_sessions,
+        database_path.display()
+    );
+    Ok(())
+}
+
+fn prune_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut data_dir = None;
+    let mut observed_before = None;
+    let mut max_events = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--data-dir" => {
+                data_dir = Some(PathBuf::from(args.next().ok_or("missing --data-dir path")?))
+            }
+            "--before" => observed_before = Some(args.next().ok_or("missing --before value")?),
+            "--older-than-days" => {
+                let days = args
+                    .next()
+                    .ok_or("missing --older-than-days value")?
+                    .parse::<i64>()?;
+                let age = TimeDelta::try_days(days).ok_or("--older-than-days is out of range")?;
+                observed_before =
+                    Some((Utc::now() - age).to_rfc3339_opts(SecondsFormat::Millis, true));
+            }
+            "--max-events" => {
+                max_events = Some(
+                    args.next()
+                        .ok_or("missing --max-events value")?
+                        .parse::<usize>()?,
+                )
+            }
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let policy = RetentionPolicy {
+        observed_before,
+        max_events,
+    };
+    if !policy.is_configured() {
+        return Err("prune requires --before, --older-than-days, or --max-events".into());
+    }
+    let mut storage = EventStore::open(&database_path)?;
+    let outcome = storage.apply_retention(&policy)?;
+    if let Some(data_dir) = data_dir {
+        refresh_projection(&mut storage, &data_dir)?;
+    }
+    println!(
+        "pruned {} runs / {} events; {} events remain",
+        outcome.deleted_runs, outcome.deleted_events, outcome.remaining_events
+    );
+    Ok(())
 }
 
 fn fold_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -104,6 +235,32 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut web_origin = "http://127.0.0.1:4173".to_owned();
     let mut legacy_snapshot_path = None;
     let mut events_path = None;
+    let mut capture_mode = env::var("ORCHETRACE_PRIVACY_MODE")
+        .ok()
+        .map(|value| parse_capture_mode(&value))
+        .transpose()?
+        .unwrap_or(CaptureMode::Standard);
+    let mut sensitive_keys = env::var("ORCHETRACE_REDACT_KEYS")
+        .ok()
+        .into_iter()
+        .flat_map(|keys| {
+            keys.split(',')
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut retention_policy = RetentionPolicy {
+        observed_before: env::var("ORCHETRACE_RETENTION_DAYS")
+            .ok()
+            .map(|value| retention_cutoff(&value, "ORCHETRACE_RETENTION_DAYS"))
+            .transpose()?,
+        max_events: env::var("ORCHETRACE_MAX_EVENTS")
+            .ok()
+            .map(|value| value.parse::<usize>())
+            .transpose()?,
+    };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -122,6 +279,24 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             }
             "--events" => {
                 events_path = Some(PathBuf::from(args.next().ok_or("missing --events path")?))
+            }
+            "--privacy-mode" => {
+                capture_mode =
+                    parse_capture_mode(&args.next().ok_or("missing --privacy-mode value")?)?
+            }
+            "--redact-key" => sensitive_keys.push(args.next().ok_or("missing --redact-key value")?),
+            "--retention-days" => {
+                retention_policy.observed_before = Some(retention_cutoff(
+                    &args.next().ok_or("missing --retention-days value")?,
+                    "--retention-days",
+                )?);
+            }
+            "--max-events" => {
+                retention_policy.max_events = Some(
+                    args.next()
+                        .ok_or("missing --max-events value")?
+                        .parse::<usize>()?,
+                )
             }
             _ => return Err(format!("unknown argument `{arg}`").into()),
         }
@@ -142,14 +317,23 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         return Err("live updates currently accept loopback listen addresses only".into());
     }
 
+    let privacy_policy = privacy_policy(capture_mode, sensitive_keys);
     let mut storage = EventStore::open(&database_path)?;
+    let scrub_outcome = storage.scrub(&privacy_policy)?;
     if let Some(path) = &events_path
         && path.exists()
     {
-        let events = read_events(path)?;
+        let mut events = read_events(path)?;
+        for event in &mut events {
+            privacy_policy.sanitize_event(event);
+        }
         storage.insert_events(&events)?;
     }
+    let retention_outcome = storage.apply_retention(&retention_policy)?;
     let events = storage.load_events()?;
+    if let Some(path) = &events_path {
+        rewrite_events(path, &events)?;
+    }
     let event_count = events.len();
     let checkpoint = storage.load_checkpoint()?;
     let (ingest, checkpoint_status) = match checkpoint {
@@ -195,10 +379,13 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     println!(
-        "Orchetrace ingest listening on {}; live -> {}; database -> {} ({checkpoint_status} checkpoint); data -> {}; events mirror -> {}",
+        "Orchetrace ingest listening on {}; live -> {}; database -> {} ({checkpoint_status} checkpoint, privacy {}, {} existing events scrubbed, {} retention events pruned); data -> {}; events mirror -> {}",
         listener.local_addr()?,
         live_endpoint.as_deref().unwrap_or("off"),
         database_path.display(),
+        capture_mode.as_str(),
+        scrub_outcome.updated_events,
+        retention_outcome.deleted_events,
         data_dir.display(),
         events_path
             .as_deref()
@@ -206,7 +393,11 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     listener.set_nonblocking(true)?;
-    let shared = Arc::new(Mutex::new(ServerState { ingest, storage }));
+    let shared = Arc::new(Mutex::new(ServerState {
+        ingest,
+        storage,
+        privacy_policy,
+    }));
     let token = Arc::new(token);
     let data_dir = Arc::new(data_dir);
     let legacy_snapshot_path = Arc::new(legacy_snapshot_path);
@@ -346,7 +537,7 @@ fn handle_client(
             )?;
             return Ok(());
         }
-        let event: CanonicalEvent = match serde_json::from_value(frame) {
+        let mut event: CanonicalEvent = match serde_json::from_value(frame) {
             Ok(event) => event,
             Err(error) => {
                 write_frame(
@@ -358,6 +549,7 @@ fn handle_client(
         };
         let event_id = event.event_id.clone();
         let mut state = state.lock().map_err(|_| "server state lock poisoned")?;
+        state.privacy_policy.sanitize_event(&mut event);
         let outcome = match state.ingest.ingest(event.clone()) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -448,6 +640,60 @@ fn is_shutdown_frame(frame: &Value) -> bool {
 struct ServerState {
     ingest: IngestStore,
     storage: EventStore,
+    privacy_policy: PrivacyPolicy,
+}
+
+fn privacy_policy(
+    capture_mode: CaptureMode,
+    sensitive_keys: impl IntoIterator<Item = String>,
+) -> PrivacyPolicy {
+    let mut policy = PrivacyPolicy::new(capture_mode);
+    for key in sensitive_keys {
+        policy.add_sensitive_key(key);
+    }
+    policy
+}
+
+fn parse_capture_mode(value: &str) -> Result<CaptureMode, Box<dyn std::error::Error>> {
+    match value {
+        "standard" => Ok(CaptureMode::Standard),
+        "metadata-only" | "metadata" => Ok(CaptureMode::MetadataOnly),
+        _ => {
+            Err(format!("unsupported privacy mode `{value}`; use standard or metadata-only").into())
+        }
+    }
+}
+
+fn parse_runtime(value: &str) -> Result<RuntimeKind, Box<dyn std::error::Error>> {
+    match value {
+        "claude-code" | "claude" => Ok(RuntimeKind::ClaudeCode),
+        "pi" => Ok(RuntimeKind::Pi),
+        "deepseek-harness" | "harness" | "deepseek" => Ok(RuntimeKind::DeepSeekHarness),
+        _ => Err(format!(
+            "unsupported runtime `{value}`; use claude-code, pi, or deepseek-harness"
+        )
+        .into()),
+    }
+}
+
+fn retention_cutoff(value: &str, option: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let days = value.parse::<i64>()?;
+    let age = TimeDelta::try_days(days).ok_or_else(|| format!("{option} is out of range"))?;
+    Ok((Utc::now() - age).to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+fn refresh_projection(
+    storage: &mut EventStore,
+    data_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let events = storage.load_events()?;
+    let event_count = events.len();
+    let ingest = IngestStore::from_events(events)?;
+    let catalog = ingest.catalog();
+    storage.save_checkpoint(&ingest.runs(), &catalog, event_count)?;
+    persist_run_data(data_dir, &ingest.runs(), &[], &catalog, &[])?;
+    prune_unlisted_run_files(data_dir, &catalog)?;
+    Ok(())
 }
 
 fn persist_run_data(
@@ -560,6 +806,28 @@ fn append_event(path: &Path, event: &CanonicalEvent) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+fn rewrite_events(
+    path: &Path,
+    events: &[CanonicalEvent],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("events mirror path needs a file name")?;
+    let temporary = path.with_file_name(format!(".{file_name}.tmp"));
+    let mut file = fs::File::create(&temporary)?;
+    for event in events {
+        serde_json::to_writer(&mut file, event)?;
+        file.write_all(b"\n")?;
+    }
+    file.sync_all()?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
 fn write_json_atomic<T: Serialize>(
     path: &Path,
     value: &T,
@@ -604,7 +872,7 @@ fn is_loopback(ip: IpAddr) -> bool {
 
 fn print_usage() {
     println!(
-        "Orchetrace CLI\n\nUsage:\n  otrace fold <events.jsonl> [--output snapshot.json] [--data-dir dir]\n  otrace serve [--listen 127.0.0.1:43117] --token <token> [--db path] [--data-dir dir] [--live-listen 127.0.0.1:43118] [--web-origin origin] [--no-live] [--snapshot legacy.json] [--events mirror.jsonl]"
+        "Orchetrace CLI\n\nUsage:\n  otrace fold <events.jsonl> [--output snapshot.json] [--data-dir dir]\n  otrace serve [--listen 127.0.0.1:43117] --token <token> [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key] [--retention-days days] [--max-events count] [--live-listen 127.0.0.1:43118] [--web-origin origin] [--no-live] [--snapshot legacy.json] [--events mirror.jsonl]\n  otrace scrub [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key]\n  otrace delete-session [--db path] [--data-dir dir] --runtime runtime --source-id id --session-id id\n  otrace prune [--db path] [--data-dir dir] [--before RFC3339 | --older-than-days days] [--max-events count]"
     );
 }
 

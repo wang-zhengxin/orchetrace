@@ -58,7 +58,8 @@ impl ManagedObservers {
                 .unwrap_or_else(|| data_dir.to_path_buf());
             fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
             fs::create_dir_all(&state_root).map_err(|error| error.to_string())?;
-            let child = Command::new(otrace)
+            let mut command = Command::new(otrace);
+            command
                 .arg("serve")
                 .arg("--listen")
                 .arg(INGEST_ADDRESS)
@@ -68,7 +69,20 @@ impl ManagedObservers {
                 .arg(data_dir)
                 .arg("--db")
                 .arg(state_root.join("orchetrace.db"))
-                .arg("--no-live")
+                .arg("--no-live");
+            append_env_option(&mut command, "ORCHETRACE_PRIVACY_MODE", "--privacy-mode");
+            append_env_option(
+                &mut command,
+                "ORCHETRACE_RETENTION_DAYS",
+                "--retention-days",
+            );
+            append_env_option(&mut command, "ORCHETRACE_MAX_EVENTS", "--max-events");
+            if let Ok(keys) = env::var("ORCHETRACE_REDACT_KEYS") {
+                for key in keys.split(',').map(str::trim).filter(|key| !key.is_empty()) {
+                    command.arg("--redact-key").arg(key);
+                }
+            }
+            let child = command
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -166,6 +180,14 @@ impl ManagedObservers {
         };
         stack.summary = summary;
         Ok(stack)
+    }
+}
+
+fn append_env_option(command: &mut Command, environment: &str, flag: &str) {
+    if let Ok(value) = env::var(environment)
+        && !value.trim().is_empty()
+    {
+        command.arg(flag).arg(value);
     }
 }
 

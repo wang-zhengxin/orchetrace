@@ -35,4 +35,6 @@ We aim to acknowledge a complete report within seven days. Resolution timing dep
 
 ## Current boundary
 
-The Alpha service accepts only loopback ingest and Live listeners, requires a per-start token and validates the WebSocket Origin. Orchetrace does not upload runtime data by design. Complete field redaction, content-addressed blob storage and configurable retention are not implemented yet, so unreviewed runtime data should not be committed or shared.
+The Alpha service accepts only loopback ingest and Live listeners, requires a per-start token and validates the WebSocket Origin. Orchetrace does not upload runtime data by design.
+
+Ingest applies recursive secret-key redaction before events reach projections, SQLite or an optional JSON mirror. Operators can select `metadata-only` capture, add organization-specific sensitive keys, scrub existing events, cascade-delete a Session tree, and prune complete Runs by age or event count. These controls reduce stored content; they are not a substitute for reviewing data before sharing it. Content-addressed encrypted blob storage is not implemented yet, so unreviewed runtime data should not be committed or attached to reports.

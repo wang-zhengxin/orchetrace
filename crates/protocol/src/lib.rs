@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod privacy;
+
+pub use privacy::{CaptureMode, OMITTED_VALUE, PrivacyPolicy, REDACTED_VALUE, SanitizationReport};
+
 pub const SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

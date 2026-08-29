@@ -1,7 +1,11 @@
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use orchetrace_ingest::{RunCatalog, RunState};
-use orchetrace_protocol::{CanonicalEvent, RuntimeKind, ValidationError};
+use orchetrace_protocol::{CanonicalEvent, PrivacyPolicy, RuntimeKind, ValidationError};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 const SCHEMA_VERSION: i64 = 2;
@@ -27,6 +31,40 @@ pub struct ProjectionCheckpoint {
     pub event_count: usize,
     pub runs: Vec<RunState>,
     pub catalog: RunCatalog,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteOutcome {
+    pub deleted_events: usize,
+    pub deleted_sessions: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    /// RFC 3339 UTC timestamp. Runs whose newest observation is older are deleted as a unit.
+    pub observed_before: Option<String>,
+    /// Hard event limit. Oldest complete runs are deleted until the store fits.
+    pub max_events: Option<usize>,
+}
+
+impl RetentionPolicy {
+    pub fn is_configured(&self) -> bool {
+        self.observed_before.is_some() || self.max_events.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionOutcome {
+    pub deleted_events: usize,
+    pub deleted_runs: usize,
+    pub remaining_events: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrubOutcome {
+    pub updated_events: usize,
+    pub redacted_fields: usize,
+    pub omitted_fields: usize,
 }
 
 #[derive(Debug)]
@@ -203,6 +241,152 @@ impl EventStore {
         Ok(usize::try_from(count).expect("SQLite COUNT(*) cannot be negative"))
     }
 
+    pub fn scrub(&mut self, policy: &PrivacyPolicy) -> Result<ScrubOutcome, StorageError> {
+        let events = self.load_events()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut outcome = ScrubOutcome::default();
+        for mut event in events {
+            let original = serde_json::to_string(&event)?;
+            let report = policy.sanitize_event(&mut event);
+            let sanitized = serde_json::to_string(&event)?;
+            outcome.redacted_fields += report.redacted_fields;
+            outcome.omitted_fields += report.omitted_fields;
+            if original != sanitized {
+                transaction.execute(
+                    "UPDATE canonical_events SET payload_json = ?1 WHERE event_id = ?2",
+                    params![sanitized, event.event_id],
+                )?;
+                outcome.updated_events += 1;
+            }
+        }
+        if outcome.updated_events > 0 {
+            invalidate_checkpoint(&transaction)?;
+        }
+        transaction.commit()?;
+        Ok(outcome)
+    }
+
+    pub fn delete_session_tree(
+        &mut self,
+        runtime: &RuntimeKind,
+        source_id: &str,
+        session_id: &str,
+    ) -> Result<DeleteOutcome, StorageError> {
+        let events = self.load_events()?;
+        let mut sessions = BTreeSet::from([session_id.to_owned()]);
+        loop {
+            let previous_len = sessions.len();
+            for event in &events {
+                if &event.runtime == runtime
+                    && event.source_id == source_id
+                    && event
+                        .parent_session_id
+                        .as_ref()
+                        .is_some_and(|parent| sessions.contains(parent))
+                {
+                    sessions.insert(event.session_id.clone());
+                }
+            }
+            if sessions.len() == previous_len {
+                break;
+            }
+        }
+        let event_ids = events
+            .iter()
+            .filter(|event| {
+                &event.runtime == runtime
+                    && event.source_id == source_id
+                    && sessions.contains(&event.session_id)
+            })
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>();
+        let deleted_sessions = events
+            .iter()
+            .filter(|event| event_ids.contains(&event.event_id.as_str()))
+            .map(|event| event.session_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for event_id in &event_ids {
+            transaction.execute(
+                "DELETE FROM canonical_events WHERE event_id = ?1",
+                [event_id],
+            )?;
+        }
+        if !event_ids.is_empty() {
+            invalidate_checkpoint(&transaction)?;
+        }
+        transaction.commit()?;
+        Ok(DeleteOutcome {
+            deleted_events: event_ids.len(),
+            deleted_sessions,
+        })
+    }
+
+    pub fn apply_retention(
+        &mut self,
+        policy: &RetentionPolicy,
+    ) -> Result<RetentionOutcome, StorageError> {
+        let events = self.load_events()?;
+        if !policy.is_configured() || events.is_empty() {
+            return Ok(RetentionOutcome {
+                remaining_events: events.len(),
+                ..RetentionOutcome::default()
+            });
+        }
+        let groups = group_events_by_run(&events);
+        let mut ordered = groups.values().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| {
+            (&left.last_observed_at, &left.root).cmp(&(&right.last_observed_at, &right.root))
+        });
+        let mut deleted_roots = BTreeSet::new();
+        let mut remaining_events = events.len();
+        if let Some(cutoff) = policy.observed_before.as_deref() {
+            for group in &ordered {
+                if group.last_observed_at.as_str() < cutoff {
+                    deleted_roots.insert(group.root.clone());
+                    remaining_events = remaining_events.saturating_sub(group.event_ids.len());
+                }
+            }
+        }
+        if let Some(max_events) = policy.max_events {
+            for group in &ordered {
+                if remaining_events <= max_events {
+                    break;
+                }
+                if deleted_roots.insert(group.root.clone()) {
+                    remaining_events = remaining_events.saturating_sub(group.event_ids.len());
+                }
+            }
+        }
+        let event_ids = deleted_roots
+            .iter()
+            .flat_map(|root| groups[root].event_ids.iter())
+            .collect::<Vec<_>>();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for event_id in &event_ids {
+            transaction.execute(
+                "DELETE FROM canonical_events WHERE event_id = ?1",
+                [event_id],
+            )?;
+        }
+        if !event_ids.is_empty() {
+            invalidate_checkpoint(&transaction)?;
+        }
+        transaction.commit()?;
+        Ok(RetentionOutcome {
+            deleted_events: event_ids.len(),
+            deleted_runs: deleted_roots.len(),
+            remaining_events,
+        })
+    }
+
     pub fn save_checkpoint(
         &mut self,
         updated_runs: &[RunState],
@@ -357,6 +541,94 @@ fn insert_event_in_transaction(
     Ok(outcome)
 }
 
+fn invalidate_checkpoint(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
+    transaction.execute("DELETE FROM run_snapshots", [])?;
+    transaction.execute("DELETE FROM run_catalog_checkpoint", [])?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SessionIdentity {
+    runtime: RuntimeKind,
+    source_id: String,
+    session_id: String,
+}
+
+impl SessionIdentity {
+    fn of(event: &CanonicalEvent) -> Self {
+        Self {
+            runtime: event.runtime.clone(),
+            source_id: event.source_id.clone(),
+            session_id: event.session_id.clone(),
+        }
+    }
+
+    fn parent(&self, parent_session_id: &str) -> Self {
+        Self {
+            runtime: self.runtime.clone(),
+            source_id: self.source_id.clone(),
+            session_id: parent_session_id.to_owned(),
+        }
+    }
+}
+
+struct StoredRunGroup {
+    root: SessionIdentity,
+    event_ids: Vec<String>,
+    last_observed_at: String,
+}
+
+fn group_events_by_run(events: &[CanonicalEvent]) -> BTreeMap<SessionIdentity, StoredRunGroup> {
+    let sessions = events
+        .iter()
+        .map(SessionIdentity::of)
+        .collect::<BTreeSet<_>>();
+    let parents = events
+        .iter()
+        .filter_map(|event| {
+            let session = SessionIdentity::of(event);
+            event
+                .parent_session_id
+                .as_deref()
+                .map(|parent| (session.clone(), session.parent(parent)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut groups = BTreeMap::<SessionIdentity, StoredRunGroup>::new();
+    for event in events {
+        let root = resolve_root(SessionIdentity::of(event), &sessions, &parents);
+        let group = groups
+            .entry(root.clone())
+            .or_insert_with(|| StoredRunGroup {
+                root,
+                event_ids: Vec::new(),
+                last_observed_at: event.observed_at.clone(),
+            });
+        group.event_ids.push(event.event_id.clone());
+        if event.observed_at > group.last_observed_at {
+            group.last_observed_at.clone_from(&event.observed_at);
+        }
+    }
+    groups
+}
+
+fn resolve_root(
+    mut session: SessionIdentity,
+    sessions: &BTreeSet<SessionIdentity>,
+    parents: &BTreeMap<SessionIdentity, SessionIdentity>,
+) -> SessionIdentity {
+    let mut visited = BTreeSet::new();
+    while visited.insert(session.clone()) {
+        let Some(parent) = parents.get(&session) else {
+            break;
+        };
+        if !sessions.contains(parent) {
+            break;
+        }
+        session = parent.clone();
+    }
+    session
+}
+
 fn runtime_slug(runtime: &RuntimeKind) -> &'static str {
     match runtime {
         RuntimeKind::ClaudeCode => "claude-code",
@@ -393,6 +665,20 @@ mod tests {
             supersedes_event_id: None,
             ignorable: false,
         }
+    }
+
+    fn session_event(
+        id: &str,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        sequence: u64,
+        observed_at: &str,
+    ) -> CanonicalEvent {
+        let mut event = event(id, sequence, session_id);
+        event.session_id = session_id.into();
+        event.parent_session_id = parent_session_id.map(str::to_owned);
+        event.observed_at = observed_at.into();
+        event
     }
 
     #[test]
@@ -548,5 +834,105 @@ mod tests {
             )
             .unwrap();
         assert!(store.load_checkpoint().unwrap().is_none());
+    }
+
+    #[test]
+    fn scrub_rewrites_existing_payloads_and_invalidates_checkpoints() {
+        let mut event = event("evt-secret", 1, "root");
+        event.data = json!({
+            "name": "bash",
+            "arguments": { "token": "secret", "command": "deploy" }
+        });
+        let ingest = orchetrace_ingest::IngestStore::from_events([event.clone()]).unwrap();
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_event(&event).unwrap();
+        store
+            .save_checkpoint(&ingest.runs(), &ingest.catalog(), 1)
+            .unwrap();
+
+        let outcome = store.scrub(&PrivacyPolicy::metadata_only()).unwrap();
+        assert_eq!(outcome.updated_events, 1);
+        assert_eq!(outcome.redacted_fields, 0);
+        assert_eq!(outcome.omitted_fields, 1);
+        let scrubbed = store.load_events().unwrap().remove(0);
+        assert_eq!(scrubbed.data["arguments"], "[OMITTED]");
+        assert_eq!(
+            scrubbed.attributes["orchetrace.privacy.capture_mode"],
+            "metadata-only"
+        );
+        assert!(store.load_checkpoint().unwrap().is_none());
+    }
+
+    #[test]
+    fn deleting_a_session_cascades_to_descendants_only() {
+        let events = [
+            session_event("root-1", "root", None, 1, "2026-08-25T00:00:01Z"),
+            session_event("child-1", "child", Some("root"), 2, "2026-08-25T00:00:02Z"),
+            session_event(
+                "grandchild-1",
+                "grandchild",
+                Some("child"),
+                3,
+                "2026-08-25T00:00:03Z",
+            ),
+            session_event("other-1", "other", None, 4, "2026-08-25T00:00:04Z"),
+        ];
+        let ingest = orchetrace_ingest::IngestStore::from_events(events.clone()).unwrap();
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_events(&events).unwrap();
+        store
+            .save_checkpoint(&ingest.runs(), &ingest.catalog(), events.len())
+            .unwrap();
+
+        let outcome = store
+            .delete_session_tree(&RuntimeKind::DeepSeekHarness, "local", "child")
+            .unwrap();
+        assert_eq!(outcome.deleted_events, 2);
+        assert_eq!(outcome.deleted_sessions, 2);
+        let remaining = store.load_events().unwrap();
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root-1", "other-1"]
+        );
+        assert!(store.load_checkpoint().unwrap().is_none());
+    }
+
+    #[test]
+    fn retention_deletes_complete_oldest_runs() {
+        let events = [
+            session_event("old-root", "old", None, 1, "2026-08-20T00:00:00Z"),
+            session_event(
+                "old-child",
+                "old-child",
+                Some("old"),
+                2,
+                "2026-08-20T00:00:01Z",
+            ),
+            session_event("middle-1", "middle", None, 3, "2026-08-25T00:00:00Z"),
+            session_event("new-1", "new", None, 4, "2026-08-29T00:00:00Z"),
+            session_event("new-2", "new", None, 5, "2026-08-29T00:00:01Z"),
+        ];
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_events(&events).unwrap();
+
+        let outcome = store
+            .apply_retention(&RetentionPolicy {
+                observed_before: Some("2026-08-22T00:00:00Z".into()),
+                max_events: Some(2),
+            })
+            .unwrap();
+        assert_eq!(outcome.deleted_runs, 2);
+        assert_eq!(outcome.deleted_events, 3);
+        assert_eq!(outcome.remaining_events, 2);
+        assert!(
+            store
+                .load_events()
+                .unwrap()
+                .iter()
+                .all(|event| event.session_id == "new")
+        );
     }
 }
