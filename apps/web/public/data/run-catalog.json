@@ -24,9 +24,9 @@
       "label": "orchestrator",
       "status": "idle",
       "outcome": null,
-      "agent_count": 8,
-      "edge_count": 7,
-      "event_count": 79,
+      "agent_count": 14,
+      "edge_count": 13,
+      "event_count": 139,
       "started_at": "2026-08-25T02:00:00.000Z",
       "last_activity_at": "2026-08-25T02:00:09.300Z"
     }

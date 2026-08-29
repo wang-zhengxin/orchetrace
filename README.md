@@ -9,6 +9,12 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 > 当前状态：`0.1.0-alpha`。核心链路已经可运行，适合本地试用和 Adapter 开发；安装包、数据保留策略和多版本兼容仍在加固中。
 
+## 终端回放演示
+
+[![OrcheTrace 14-Agent 终端回放](demo/orchetrace-tui-14-agents.png)](demo/orchetrace-tui-14-agents.mp4)
+
+点击封面观看约 34 秒的 14-Agent 实际 TUI 回放：节点按真实时间逐步出现，拓扑缩略图与多行时间泳道同步更新；演示包含播放/暂停、根 Agent 详情、失败节点证据、历史时间点定位、恢复播放及节点侧栏详情。
+
 ## 核心能力
 
 - Claude Code、Pi、DeepSeek Harness 统一接入；
@@ -60,7 +66,7 @@ flowchart LR
 
 ## 快速开始
 
-生成演示数据并启动 Web 工作台：
+生成包含 14 个 Agent、13 条父子边和 139 个事件的演示数据，并启动 Web 工作台：
 
 ```bash
 npm run fixture:demo

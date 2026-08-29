@@ -4,7 +4,7 @@
   "runtimes": [
     "deepseek-harness"
   ],
-  "event_count": 79,
+  "event_count": 139,
   "started_at": "2026-08-25T02:00:00.000Z",
   "last_activity_at": "2026-08-25T02:00:09.300Z",
   "agents": [
@@ -91,6 +91,44 @@
           "duration_ms": 2400,
           "input_summary": "Inspect the official persistence and session event contracts",
           "output_summary": "Protocol contracts confirmed."
+        }
+      ]
+    },
+    {
+      "id": "agent-release",
+      "parent_id": "run-root",
+      "label": "release coordinator",
+      "role": "release",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot task returned verified evidence",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:04.900Z",
+      "last_activity_at": "2026-08-25T02:00:08.800Z",
+      "activations": [
+        {
+          "id": "agent-release-a1",
+          "started_at": "2026-08-25T02:00:04.930Z",
+          "ended_at": "2026-08-25T02:00:08.800Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-release-tool",
+          "name": "release_check",
+          "started_at": "2026-08-25T02:00:05.120Z",
+          "ended_at": "2026-08-25T02:00:08.540Z",
+          "outcome": "succeeded",
+          "duration_ms": 3420,
+          "input_summary": "{\"target\":\"release coordinator\"}",
+          "output_summary": "release coordinator completed with verified evidence."
         }
       ]
     },
@@ -219,6 +257,82 @@
       ]
     },
     {
+      "id": "agent-security",
+      "parent_id": "agent-research",
+      "label": "security auditor",
+      "role": "security",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot task returned verified evidence",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:02.450Z",
+      "last_activity_at": "2026-08-25T02:00:04.850Z",
+      "activations": [
+        {
+          "id": "agent-security-a1",
+          "started_at": "2026-08-25T02:00:02.480Z",
+          "ended_at": "2026-08-25T02:00:04.850Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-security-tool",
+          "name": "security_scan",
+          "started_at": "2026-08-25T02:00:02.670Z",
+          "ended_at": "2026-08-25T02:00:04.590Z",
+          "outcome": "succeeded",
+          "duration_ms": 1920,
+          "input_summary": "{\"target\":\"security auditor\"}",
+          "output_summary": "security auditor completed with verified evidence."
+        }
+      ]
+    },
+    {
+      "id": "agent-schema",
+      "parent_id": "agent-research",
+      "label": "schema reviewer",
+      "role": "protocol",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot task returned verified evidence",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:03.150Z",
+      "last_activity_at": "2026-08-25T02:00:05.250Z",
+      "activations": [
+        {
+          "id": "agent-schema-a1",
+          "started_at": "2026-08-25T02:00:03.180Z",
+          "ended_at": "2026-08-25T02:00:05.250Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-schema-tool",
+          "name": "schema_diff",
+          "started_at": "2026-08-25T02:00:03.370Z",
+          "ended_at": "2026-08-25T02:00:04.990Z",
+          "outcome": "succeeded",
+          "duration_ms": 1620,
+          "input_summary": "{\"target\":\"schema reviewer\"}",
+          "output_summary": "schema reviewer completed with verified evidence."
+        }
+      ]
+    },
+    {
       "id": "agent-storage",
       "parent_id": "agent-research",
       "label": "storage analyst",
@@ -295,6 +409,120 @@
       ]
     },
     {
+      "id": "agent-accessibility",
+      "parent_id": "agent-ui",
+      "label": "accessibility reviewer",
+      "role": "a11y",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot task returned verified evidence",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:05.850Z",
+      "last_activity_at": "2026-08-25T02:00:07.700Z",
+      "activations": [
+        {
+          "id": "agent-accessibility-a1",
+          "started_at": "2026-08-25T02:00:05.880Z",
+          "ended_at": "2026-08-25T02:00:07.700Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-accessibility-tool",
+          "name": "contrast_audit",
+          "started_at": "2026-08-25T02:00:06.070Z",
+          "ended_at": "2026-08-25T02:00:07.440Z",
+          "outcome": "succeeded",
+          "duration_ms": 1370,
+          "input_summary": "{\"target\":\"accessibility reviewer\"}",
+          "output_summary": "accessibility reviewer completed with verified evidence."
+        }
+      ]
+    },
+    {
+      "id": "agent-performance",
+      "parent_id": "agent-builder",
+      "label": "performance profiler",
+      "role": "performance",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "failed",
+      "outcome_evidence": "verification returned a reproducible failure",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 1,
+      "started_at": "2026-08-25T02:00:06.050Z",
+      "last_activity_at": "2026-08-25T02:00:08.600Z",
+      "activations": [
+        {
+          "id": "agent-performance-a1",
+          "started_at": "2026-08-25T02:00:06.080Z",
+          "ended_at": "2026-08-25T02:00:08.600Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-performance-tool",
+          "name": "cargo_bench",
+          "started_at": "2026-08-25T02:00:06.270Z",
+          "ended_at": "2026-08-25T02:00:08.340Z",
+          "outcome": "failed",
+          "duration_ms": 2070,
+          "input_summary": "{\"target\":\"performance profiler\"}",
+          "output_summary": "performance profiler found a blocking regression."
+        }
+      ]
+    },
+    {
+      "id": "agent-release-notes",
+      "parent_id": "agent-release",
+      "label": "release notes writer",
+      "role": "documentation",
+      "mode": "one-shot",
+      "provider": "deepseek",
+      "model": "DeepSeek-V4-Flash",
+      "detail_level": "full",
+      "status": "inactive",
+      "outcome": "succeeded",
+      "outcome_evidence": "one-shot task returned verified evidence",
+      "current_tool": null,
+      "tool_count": 1,
+      "failed_tool_count": 0,
+      "started_at": "2026-08-25T02:00:06.500Z",
+      "last_activity_at": "2026-08-25T02:00:08.650Z",
+      "activations": [
+        {
+          "id": "agent-release-notes-a1",
+          "started_at": "2026-08-25T02:00:06.530Z",
+          "ended_at": "2026-08-25T02:00:08.650Z",
+          "end_status": "inactive"
+        }
+      ],
+      "tools": [
+        {
+          "call_id": "agent-release-notes-tool",
+          "name": "write_report",
+          "started_at": "2026-08-25T02:00:06.720Z",
+          "ended_at": "2026-08-25T02:00:08.390Z",
+          "outcome": "succeeded",
+          "duration_ms": 1670,
+          "input_summary": "{\"target\":\"release notes writer\"}",
+          "output_summary": "release notes writer completed with verified evidence."
+        }
+      ]
+    },
+    {
       "id": "agent-tests",
       "parent_id": "agent-builder",
       "label": "test runner",
@@ -336,7 +564,19 @@
   "edges": [
     {
       "parent_id": "agent-builder",
+      "child_id": "agent-performance",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-builder",
       "child_id": "agent-tests",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-release",
+      "child_id": "agent-release-notes",
       "relation": "delegate",
       "opaque": false
     },
@@ -348,7 +588,25 @@
     },
     {
       "parent_id": "agent-research",
+      "child_id": "agent-schema",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-research",
+      "child_id": "agent-security",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-research",
       "child_id": "agent-storage",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "agent-ui",
+      "child_id": "agent-accessibility",
       "relation": "delegate",
       "opaque": false
     },
@@ -361,6 +619,12 @@
     {
       "parent_id": "run-root",
       "child_id": "agent-builder",
+      "relation": "delegate",
+      "opaque": false
+    },
+    {
+      "parent_id": "run-root",
+      "child_id": "agent-release",
       "relation": "delegate",
       "opaque": false
     },
@@ -470,6 +734,62 @@
       "outcome": null
     },
     {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:02.450Z",
+      "kind": "spawn",
+      "label": "security auditor",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:02.480Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:02.530Z",
+      "kind": "prompt",
+      "label": "Audit local ingest authentication and loopback boundaries.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:02.670Z",
+      "kind": "tool",
+      "label": "security_scan",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:03.150Z",
+      "kind": "spawn",
+      "label": "schema reviewer",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:03.180Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:03.230Z",
+      "kind": "prompt",
+      "label": "Verify canonical event compatibility across all runtimes.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:03.370Z",
+      "kind": "tool",
+      "label": "schema_diff",
+      "outcome": null
+    },
+    {
       "session_id": "agent-docs",
       "at": "2026-08-25T02:00:03.500Z",
       "kind": "tool-result",
@@ -526,6 +846,13 @@
       "outcome": null
     },
     {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:04.590Z",
+      "kind": "tool-result",
+      "label": "security_scan",
+      "outcome": "succeeded"
+    },
+    {
       "session_id": "agent-storage",
       "at": "2026-08-25T02:00:04.600Z",
       "kind": "tool-result",
@@ -540,6 +867,20 @@
       "outcome": "succeeded"
     },
     {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:04.670Z",
+      "kind": "message",
+      "label": "Evidence is ready for the orchestrator.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-security",
+      "at": "2026-08-25T02:00:04.770Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
       "session_id": "agent-research",
       "at": "2026-08-25T02:00:04.800Z",
       "kind": "message",
@@ -547,8 +888,57 @@
       "outcome": null
     },
     {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:04.900Z",
+      "kind": "spawn",
+      "label": "release coordinator",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:04.930Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:04.980Z",
+      "kind": "prompt",
+      "label": "Coordinate release evidence from every active workstream.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:04.990Z",
+      "kind": "tool-result",
+      "label": "schema_diff",
+      "outcome": "succeeded"
+    },
+    {
       "session_id": "agent-research",
       "at": "2026-08-25T02:00:05.000Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:05.070Z",
+      "kind": "message",
+      "label": "Evidence is ready for the orchestrator.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:05.120Z",
+      "kind": "tool",
+      "label": "release_check",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-schema",
+      "at": "2026-08-25T02:00:05.170Z",
       "kind": "outcome",
       "label": "agent outcome",
       "outcome": "succeeded"
@@ -645,10 +1035,59 @@
       "outcome": null
     },
     {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:05.850Z",
+      "kind": "spawn",
+      "label": "accessibility reviewer",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:05.880Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:05.930Z",
+      "kind": "prompt",
+      "label": "Check terminal contrast, focus, and keyboard navigation.",
+      "outcome": null
+    },
+    {
       "session_id": "agent-builder",
       "at": "2026-08-25T02:00:06.000Z",
       "kind": "tool",
       "label": "str_replace_editor",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:06.050Z",
+      "kind": "spawn",
+      "label": "performance profiler",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:06.070Z",
+      "kind": "tool",
+      "label": "contrast_audit",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:06.080Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:06.130Z",
+      "kind": "prompt",
+      "label": "Profile replay redraw latency under concurrent Agent activity.",
       "outcome": null
     },
     {
@@ -659,11 +1098,46 @@
       "outcome": "succeeded"
     },
     {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:06.270Z",
+      "kind": "tool",
+      "label": "cargo_bench",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:06.500Z",
+      "kind": "spawn",
+      "label": "release notes writer",
+      "outcome": null
+    },
+    {
       "session_id": "agent-ui",
       "at": "2026-08-25T02:00:06.500Z",
       "kind": "outcome",
       "label": "agent outcome",
       "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:06.530Z",
+      "kind": "activation",
+      "label": "activation started",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:06.580Z",
+      "kind": "prompt",
+      "label": "Summarize verified changes and known limitations.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:06.720Z",
+      "kind": "tool",
+      "label": "write_report",
+      "outcome": null
     },
     {
       "session_id": "agent-builder",
@@ -708,6 +1182,27 @@
       "outcome": null
     },
     {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:07.440Z",
+      "kind": "tool-result",
+      "label": "contrast_audit",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:07.520Z",
+      "kind": "message",
+      "label": "Evidence is ready for the orchestrator.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-accessibility",
+      "at": "2026-08-25T02:00:07.620Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
       "session_id": "agent-tests",
       "at": "2026-08-25T02:00:07.800Z",
       "kind": "tool-result",
@@ -743,11 +1238,74 @@
       "outcome": "failed"
     },
     {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:08.340Z",
+      "kind": "tool-result",
+      "label": "cargo_bench",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:08.390Z",
+      "kind": "tool-result",
+      "label": "write_report",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:08.420Z",
+      "kind": "message",
+      "label": "A blocking issue requires follow-up.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:08.470Z",
+      "kind": "message",
+      "label": "Evidence is ready for the orchestrator.",
+      "outcome": null
+    },
+    {
       "session_id": "run-root",
       "at": "2026-08-25T02:00:08.500Z",
       "kind": "tool-result",
       "label": "delegate_task",
       "outcome": "failed"
+    },
+    {
+      "session_id": "agent-performance",
+      "at": "2026-08-25T02:00:08.520Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "failed"
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:08.540Z",
+      "kind": "tool-result",
+      "label": "release_check",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-release-notes",
+      "at": "2026-08-25T02:00:08.570Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:08.620Z",
+      "kind": "message",
+      "label": "Evidence is ready for the orchestrator.",
+      "outcome": null
+    },
+    {
+      "session_id": "agent-release",
+      "at": "2026-08-25T02:00:08.720Z",
+      "kind": "outcome",
+      "label": "agent outcome",
+      "outcome": "succeeded"
     },
     {
       "session_id": "run-root",
