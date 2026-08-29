@@ -708,20 +708,12 @@ fn resolve_root(
 fn make_run_id(runtime: &RuntimeKind, source_id: &str, root_session_id: &str) -> String {
     format!(
         "{}:{}:{}:{}:{}",
-        runtime_slug(runtime),
+        runtime.as_str(),
         source_id.len(),
         source_id,
         root_session_id.len(),
         root_session_id
     )
-}
-
-fn runtime_slug(runtime: &RuntimeKind) -> &'static str {
-    match runtime {
-        RuntimeKind::ClaudeCode => "claude-code",
-        RuntimeKind::Pi => "pi",
-        RuntimeKind::DeepSeekHarness => "deepseek-harness",
-    }
 }
 
 fn catalog_from_runs<'a>(

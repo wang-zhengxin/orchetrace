@@ -3,7 +3,7 @@
 [![CI](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml/badge.svg)](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 Claude Code、Pi 和 DeepSeek Harness 的会话、父子 Agent 拓扑、工具调用、状态证据与执行时间线。
+Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 Claude Code、Codex、Pi 和 DeepSeek Harness 的会话、父子 Agent 拓扑、工具调用、状态证据与执行时间线。
 
 它不是 Agent 编排器，也不替代各运行时自己的交互界面。Orchetrace 只观察运行时已经产生的事实，并将它们转换为一致、可回放的诊断视图。
 
@@ -17,14 +17,14 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 ## 核心能力
 
-- Claude Code、Pi、DeepSeek Harness 统一接入；
+- Claude Code、Codex、Pi、DeepSeek Harness 统一接入，并允许未知 Runtime 以注册描述符扩展；
 - 根 Agent、子 Agent 和嵌套子 Agent 拓扑；
 - Replay 与 Live 两种观察模式；
 - Agent 状态、activation、工具调用、错误和终态证据；
 - 多 Run Catalog、搜索、状态过滤、Inspector 和 Timeline；
 - Rust 确定性 fold、SQLite 事实存储、增量快照和 delta；
 - WebSocket 实时通知，断开后自动降级为轮询；
-- Tauri 桌面壳、受管 `otrace` sidecar、三运行时自动发现和诊断抽屉；
+- Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和诊断抽屉；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
 
@@ -35,6 +35,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 | DeepSeek Harness | Zstandard persistence | 被动自动发现 + Cordis Observer | 原生 session 与 descriptor |
 | Claude Code | JSONL transcript | 自动发现 + 增量 polling observer | subagent 与 workflow 文件 |
 | Pi | v1-v3 session JSONL | 被动自动发现 + 可选 RPC bridge | 显式 telemetry extension |
+| Codex | rollout JSONL | 递归自动发现 + ACK 后提交字节游标 | 原生 `thread_spawn.parent_thread_id` |
 
 Pi 的普通对话分支不会被误判为子 Agent。只有 extension 提供显式 telemetry 时，Orchetrace 才展示 Pi 子 Agent 拓扑。
 
@@ -45,6 +46,7 @@ flowchart LR
     Claude["Claude Code"] --> Adapters["TypeScript Adapters"]
     Pi["Pi"] --> Adapters
     Harness["DeepSeek Harness"] --> Adapters
+    Codex["Codex"] --> Adapters
     Adapters --> Protocol["Canonical Event v1"]
     Protocol --> Core["Rust Core + SQLite"]
     Core --> Projection["Catalog / Snapshot / Delta"]
@@ -95,7 +97,7 @@ cargo install --path crates/cli --bins
 orche
 ```
 
-`orche` 默认会启动本机 Ingest，并被动观察当前及后续打开的 Claude Code、Pi 和 DeepSeek Harness 会话；无需另外启动桌面端或 watcher。它会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
+`orche` 默认会启动本机 Ingest，并被动观察当前及后续打开的 Claude Code、Codex、Pi 和 DeepSeek Harness 会话；无需另外启动桌面端或 watcher。它会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
 
 ```bash
 orche --data-dir /path/to/orchetrace/data
@@ -226,6 +228,21 @@ npm run pi:live -- /path/to/pi-session.jsonl \
 
 Tauri 桌面端会随受管 Ingest 自动启动 Pi 被动 watcher，也可在 Runtime Diagnostics 中独立启停。RPC Bridge 仍保留给需要完整 RPC 生命周期或由 Orchetrace 主动托管 Pi 的场景。
 
+## 接入 Codex
+
+监听 Codex CLI、Desktop 或编辑器已经写入的当前会话：
+
+```bash
+export ORCHETRACE_TOKEN="<与 otrace serve 相同的 token>"
+npm run codex:auto
+```
+
+自动发现器递归监听 `~/.codex/sessions/**/rollout-*.jsonl` 中最近 6 小时活跃的会话。它按字节增量读取，只在 Rust Ingest 确认事件后提交 `0600` cursor；因此不会启动、恢复或控制 Codex，也不会在每次轮询时重读完整 rollout。`-- --include-existing` 可导入全部历史。
+
+Codex `session_meta` 中的 `thread_spawn.parent_thread_id`、`depth`、Agent 昵称和角色会映射为真实父子拓扑；task、message、reasoning、exec、Patch、MCP 和 Web Search 事件会进入同一条真实时间轴。Tauri 和终端 `orche` 会随受管 Ingest 自动启动该 watcher，也可以设置 `ORCHETRACE_CODEX_SESSIONS_DIR` 覆盖默认目录。
+
+Runtime 协议对 `codex` 有内置描述符，同时允许 Adapter 发送其他非空 Runtime 标识；未知 Runtime 会使用安全的中性色和自动生成标签显示，不再要求 Rust Core 发版才能存储与回放。
+
 ## 接入 DeepSeek Harness
 
 无需修改 Harness 配置即可监听当前和新会话：
@@ -336,6 +353,7 @@ otrace prune \
 
 - Claude Live 仍使用 polling，大型 transcript 尚未使用 byte-range parser cache；
 - Pi 被动 watcher 会防御性重读活动分支，大型 session 尚未使用 byte-range parser cache；
+- Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
 - DeepSeek Harness 被动 watcher 依赖 `zstd` CLI；精确的瞬时 Agent status 仍需要 Cordis Observer；
 - Tauri bundle、代码签名、自动更新与跨平台安装验证尚未完成；

@@ -1,0 +1,9 @@
+{"timestamp":"2026-08-30T01:00:00.000Z","type":"session_meta","payload":{"id":"codex-root","session_id":"codex-root","cwd":"/workspace/orchetrace","model_provider":"openai","originator":"Codex CLI","source":"cli","thread_source":"user"}}
+{"timestamp":"2026-08-30T01:00:00.100Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-5-codex"}}
+{"timestamp":"2026-08-30T01:00:00.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-08-30T01:00:00.300Z","type":"event_msg","payload":{"type":"user_message","message":"Inspect the adapter architecture."}}
+{"timestamp":"2026-08-30T01:00:01.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-1","name":"exec","input":"rg RuntimeKind crates"}}
+{"timestamp":"2026-08-30T01:00:01.400Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":{"success":true,"stdout":"4 matches"}}}
+{"timestamp":"2026-08-30T01:00:01.600Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"The runtime needs a registry."}}
+{"timestamp":"2026-08-30T01:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Implemented the registry."}}
+{"timestamp":"2026-08-30T01:00:02.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Implemented the registry."}}

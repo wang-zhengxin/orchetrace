@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-30T01:00:00.700Z","type":"session_meta","payload":{"id":"codex-child","session_id":"codex-root","cwd":"/workspace/orchetrace","model_provider":"openai","originator":"Codex Desktop","thread_source":"subagent","source":{"subagent":{"thread_spawn":{"parent_thread_id":"codex-root","depth":1,"agent_path":"/root/adapter_review","agent_nickname":"Ada","agent_role":"reviewer"}}}}}
+{"timestamp":"2026-08-30T01:00:00.800Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn"}}
+{"timestamp":"2026-08-30T01:00:01.100Z","type":"response_item","payload":{"type":"function_call","call_id":"review-1","name":"review","arguments":"{\"scope\":\"runtime registry\"}"}}
+{"timestamp":"2026-08-30T01:00:01.500Z","type":"response_item","payload":{"type":"function_call_output","call_id":"review-1","output":"No blocking issues."}}
+{"timestamp":"2026-08-30T01:00:01.800Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"child-turn","last_agent_message":"Review passed."}}

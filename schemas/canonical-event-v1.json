@@ -19,7 +19,9 @@
     "schema_version": { "const": 1 },
     "event_id": { "type": "string", "minLength": 1 },
     "runtime": {
-      "enum": ["claude-code", "pi", "deepseek-harness"]
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": ["claude-code", "pi", "deepseek-harness", "codex"]
     },
     "source_id": { "type": "string", "minLength": 1 },
     "session_id": { "type": "string", "minLength": 1 },

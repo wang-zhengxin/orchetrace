@@ -11,15 +11,18 @@ import {
   readManagedIngestStatus,
   readPiIntegrationStatus,
   readHarnessIntegrationStatus,
+  readCodexIntegrationStatus,
   readRunSnapshot,
   startManagedIngest,
   startPiAuto,
   startHarnessAuto,
+  startCodexAuto,
   startClaudeAuto,
   stopClaudeAuto,
   stopManagedIngest,
   stopPiAuto,
   stopHarnessAuto,
+  stopCodexAuto,
 } from "./desktop-bridge.js";
 
 test("native catalog IPC is preferred without issuing an HTTP request", async () => {
@@ -39,7 +42,7 @@ test("native catalog IPC is preferred without issuing an HTTP request", async ()
   assert.deepEqual(calls, [["read_catalog", undefined]]);
 });
 
-test("Pi and Harness passive observers use fixed lifecycle commands", async () => {
+test("Pi, Harness, and Codex passive observers use fixed lifecycle commands", async () => {
   const calls = [];
   const invoke = async (command, args) => {
     calls.push([command, args]);
@@ -52,6 +55,9 @@ test("Pi and Harness passive observers use fixed lifecycle commands", async () =
   assert.equal((await readHarnessIntegrationStatus({ invoke })).phase, "running");
   assert.equal((await startHarnessAuto({ invoke })).phase, "running");
   assert.equal((await stopHarnessAuto({ invoke })).phase, "stopped");
+  assert.equal((await readCodexIntegrationStatus({ invoke })).phase, "running");
+  assert.equal((await startCodexAuto({ invoke })).phase, "running");
+  assert.equal((await stopCodexAuto({ invoke })).phase, "stopped");
   assert.deepEqual(calls, [
     ["pi_integration_status", undefined],
     ["start_pi_auto", undefined],
@@ -59,6 +65,9 @@ test("Pi and Harness passive observers use fixed lifecycle commands", async () =
     ["harness_integration_status", undefined],
     ["start_harness_auto", undefined],
     ["stop_harness_auto", undefined],
+    ["codex_integration_status", undefined],
+    ["start_codex_auto", undefined],
+    ["stop_codex_auto", undefined],
   ]);
 });
 

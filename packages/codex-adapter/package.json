@@ -1,0 +1,14 @@
+{
+  "name": "@orchetrace/codex-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "bin": {
+    "orchetrace-codex-auto": "./src/auto-cli.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "auto": "node src/auto-cli.ts"
+  }
+}

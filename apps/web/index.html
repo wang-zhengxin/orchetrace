@@ -72,7 +72,7 @@
       </section>
 
       <div class="utility-cache" aria-hidden="true">
-        <div id="source-dsh"><span id="source-count-dsh">0</span></div><div id="source-claude"><span id="source-count-claude">0</span></div><div id="source-pi"><span id="source-count-pi">0</span></div><span id="index-state">LOCAL ONLY</span>
+        <div id="source-dsh"><span id="source-count-dsh">0</span></div><div id="source-claude"><span id="source-count-claude">0</span></div><div id="source-pi"><span id="source-count-pi">0</span></div><div id="source-codex"><span id="source-count-codex">0</span></div><span id="index-state">LOCAL ONLY</span>
       </div>
     </div>
 
@@ -147,6 +147,19 @@
               <button id="harness-auto-action" type="button">START WATCHER</button>
             </div>
           </article>
+
+          <article class="runtime-observer-card codex">
+            <div class="runtime-observer-title">
+              <span class="runtime-adapter-mark">CX</span>
+              <strong>CODEX</strong>
+              <span class="runtime-mini-phase stopped" id="codex-auto-phase"><i></i><b>STOPPED</b></span>
+            </div>
+            <p id="codex-auto-summary">Incrementally follows Codex rollout files, including spawned subagents.</p>
+            <code id="codex-auto-sessions">~/.codex/sessions</code>
+            <div class="runtime-observer-actions">
+              <button id="codex-auto-action" type="button">START WATCHER</button>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -167,6 +180,7 @@
           <div><span class="source-glyph">DS</span><strong>Harness</strong><b id="runtime-source-dsh">0</b></div>
           <div><span class="source-glyph">CC</span><strong>Claude Code</strong><b id="runtime-source-claude">0</b></div>
           <div><span class="source-glyph">π</span><strong>Pi</strong><b id="runtime-source-pi">0</b></div>
+          <div><span class="source-glyph">CX</span><strong>Codex</strong><b id="runtime-source-codex">0</b></div>
         </div>
       </section>
 

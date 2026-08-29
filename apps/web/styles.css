@@ -443,6 +443,7 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .runtime-observer-card.claude { --adapter-accent: #d6a56f; grid-column: 1 / -1; }
 .runtime-observer-card.pi { --adapter-accent: var(--focus); }
 .runtime-observer-card.harness { --adapter-accent: #6aa9ff; }
+.runtime-observer-card.codex { --adapter-accent: #72d6a0; }
 
 .runtime-observer-title {
   display: grid;
@@ -526,7 +527,7 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .runtime-logs { padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .runtime-section-heading { display: flex; justify-content: space-between; align-items: center; }
 .runtime-section-heading small { color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 7px; }
-.runtime-source-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
+.runtime-source-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 12px; }
 .runtime-source-grid > div { position: relative; display: grid; grid-template-columns: 22px 1fr; gap: 7px; align-items: center; min-width: 0; padding: 9px; background: rgb(23 33 44 / 72%); border: 1px solid var(--border-soft); border-radius: 3px; }
 .runtime-source-grid strong { overflow: hidden; color: var(--text-muted); font-size: 8px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-source-grid b { position: absolute; top: 4px; right: 5px; color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 7px; }

@@ -1,5 +1,6 @@
 import { applyRunSnapshotDelta } from "./run-delta.js";
 import { agentEventsAtTime, snapshotAtTime, timelineBounds } from "./time-travel.js";
+import { runtimeDescriptor, registeredRuntimeDescriptors } from "./runtime-registry.js";
 import {
   disableClaudeHooks,
   enableClaudeHooks,
@@ -9,16 +10,19 @@ import {
   readLegacySnapshot,
   readLiveConfig,
   readHarnessIntegrationStatus,
+  readCodexIntegrationStatus,
   readManagedIngestStatus,
   readPiIntegrationStatus,
   readRunDelta,
   readRunSnapshot,
   startManagedIngest,
   startHarnessAuto,
+  startCodexAuto,
   startPiAuto,
   startClaudeAuto,
   stopClaudeAuto,
   stopHarnessAuto,
+  stopCodexAuto,
   stopManagedIngest,
   stopPiAuto,
 } from "./desktop-bridge.js";
@@ -65,6 +69,7 @@ const state = {
   claudeIntegration: null,
   piIntegration: null,
   harnessIntegration: null,
+  codexIntegration: null,
   runtimeDrawerOpen: false,
   runtimePollTimer: null,
   runtimeBusy: false,
@@ -116,6 +121,8 @@ const refs = Object.fromEntries(
     "source-count-dsh",
     "source-count-claude",
     "source-count-pi",
+    "source-codex",
+    "source-count-codex",
     "index-state",
     "fatal-state",
     "fatal-message",
@@ -142,6 +149,10 @@ const refs = Object.fromEntries(
     "harness-auto-summary",
     "harness-auto-sessions",
     "harness-auto-action",
+    "codex-auto-phase",
+    "codex-auto-summary",
+    "codex-auto-sessions",
+    "codex-auto-action",
     "runtime-ingest-endpoint",
     "runtime-live-endpoint",
     "runtime-pid",
@@ -151,6 +162,7 @@ const refs = Object.fromEntries(
     "runtime-source-dsh",
     "runtime-source-claude",
     "runtime-source-pi",
+    "runtime-source-codex",
     "runtime-log-list",
   ].map((id) => [camel(id), document.getElementById(id)]),
 );
@@ -179,6 +191,7 @@ async function initializeShell() {
     renderClaudeIntegration(null);
     renderPassiveIntegration("pi", null);
     renderPassiveIntegration("harness", null);
+    renderPassiveIntegration("codex", null);
     return;
   }
   document.documentElement.dataset.shell = info.shell;
@@ -212,6 +225,7 @@ function wireInteractions() {
   refs.claudeHooksAction.addEventListener("click", () => void toggleClaudeHooks());
   refs.piAutoAction.addEventListener("click", () => void togglePassiveObserver("pi"));
   refs.harnessAutoAction.addEventListener("click", () => void togglePassiveObserver("harness"));
+  refs.codexAutoAction.addEventListener("click", () => void togglePassiveObserver("codex"));
   refs.runtimeTokenCopy.addEventListener("click", () => void copyManagedToken());
   refs.timelineScrubber.addEventListener("input", () => {
     if (!state.snapshot) return;
@@ -289,23 +303,27 @@ async function refreshManagedIngest() {
     renderClaudeIntegration(null);
     renderPassiveIntegration("pi", null);
     renderPassiveIntegration("harness", null);
+    renderPassiveIntegration("codex", null);
     return;
   }
   try {
-    const [status, claude, pi, harness] = await Promise.all([
+    const [status, claude, pi, harness, codex] = await Promise.all([
       readManagedIngestStatus(),
       readClaudeIntegrationStatus(),
       readPiIntegrationStatus(),
       readHarnessIntegrationStatus(),
+      readCodexIntegrationStatus(),
     ]);
     state.managedIngest = status;
     state.claudeIntegration = claude;
     state.piIntegration = pi;
     state.harnessIntegration = harness;
+    state.codexIntegration = codex;
     renderManagedIngest(status);
     renderClaudeIntegration(claude);
     renderPassiveIntegration("pi", pi);
     renderPassiveIntegration("harness", harness);
+    renderPassiveIntegration("codex", codex);
     setRuntimeError("");
   } catch (error) {
     setRuntimeError(String(error));
@@ -323,14 +341,16 @@ async function toggleManagedIngest() {
     const status = running ? await stopManagedIngest() : await startManagedIngest();
     state.managedIngest = status;
     renderManagedIngest(status);
-    const [claude, pi, harness] = await Promise.all([
+    const [claude, pi, harness, codex] = await Promise.all([
       readClaudeIntegrationStatus(),
       readPiIntegrationStatus(),
       readHarnessIntegrationStatus(),
+      readCodexIntegrationStatus(),
     ]);
     state.claudeIntegration = claude;
     state.piIntegration = pi;
     state.harnessIntegration = harness;
+    state.codexIntegration = codex;
     renderAllIntegrations();
     if (status?.phase === "running") activateMode("live");
     else if (state.mode === "live") activateMode("replay");
@@ -346,9 +366,12 @@ async function toggleManagedIngest() {
 
 async function togglePassiveObserver(runtime) {
   if (state.runtimeBusy || !state.desktopInfo) return;
-  const config = runtime === "pi"
-    ? { key: "piIntegration", start: startPiAuto, stop: stopPiAuto }
-    : { key: "harnessIntegration", start: startHarnessAuto, stop: stopHarnessAuto };
+  const config = {
+    pi: { key: "piIntegration", start: startPiAuto, stop: stopPiAuto },
+    harness: { key: "harnessIntegration", start: startHarnessAuto, stop: stopHarnessAuto },
+    codex: { key: "codexIntegration", start: startCodexAuto, stop: stopCodexAuto },
+  }[runtime];
+  if (!config) return;
   state.runtimeBusy = true;
   renderAllIntegrations();
   setRuntimeError("");
@@ -493,19 +516,27 @@ function renderClaudeIntegration(status) {
 }
 
 function renderPassiveIntegration(runtime, status) {
-  const refsByRuntime = runtime === "pi"
-    ? {
-        phase: refs.piAutoPhase,
-        summary: refs.piAutoSummary,
-        sessions: refs.piAutoSessions,
-        action: refs.piAutoAction,
-      }
-    : {
-        phase: refs.harnessAutoPhase,
-        summary: refs.harnessAutoSummary,
-        sessions: refs.harnessAutoSessions,
-        action: refs.harnessAutoAction,
-      };
+  const refsByRuntime = {
+    pi: {
+      phase: refs.piAutoPhase,
+      summary: refs.piAutoSummary,
+      sessions: refs.piAutoSessions,
+      action: refs.piAutoAction,
+    },
+    harness: {
+      phase: refs.harnessAutoPhase,
+      summary: refs.harnessAutoSummary,
+      sessions: refs.harnessAutoSessions,
+      action: refs.harnessAutoAction,
+    },
+    codex: {
+      phase: refs.codexAutoPhase,
+      summary: refs.codexAutoSummary,
+      sessions: refs.codexAutoSessions,
+      action: refs.codexAutoAction,
+    },
+  }[runtime];
+  if (!refsByRuntime) return;
   const phase = status?.phase ?? "browser";
   const labels = {
     running: "WATCHING",
@@ -516,18 +547,21 @@ function renderPassiveIntegration(runtime, status) {
   };
   refsByRuntime.phase.className = `runtime-mini-phase ${phase}`;
   refsByRuntime.phase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
-  const name = runtime === "pi" ? "Pi" : "Harness";
+  const descriptor = runtimeDescriptor(runtime === "harness" ? "deepseek-harness" : runtime);
+  const name = descriptor.label;
   const summaries = {
     running: runtime === "pi"
       ? "Open Pi sessions are being tailed passively; no second agent process is launched."
-      : "Harness persistence is being decoded and synchronized with stable session cursors.",
+      : runtime === "codex"
+        ? "Codex rollout files and spawned subagents are synchronized with ACK-backed byte cursors."
+        : "Harness persistence is being decoded and synchronized with stable session cursors.",
     stopped: "Starts automatically with managed ingest, or can be controlled independently.",
     exited: `The ${name} watcher exited; inspect the merged process log before restarting.`,
     unavailable: `Node.js or the ${name} adapter sidecar is unavailable.`,
     browser: `${name} auto-discovery is managed by the Tauri desktop shell.`,
   };
   refsByRuntime.summary.textContent = summaries[phase] ?? `${name} integration status is unavailable.`;
-  refsByRuntime.sessions.textContent = status?.sessions_dir ?? (runtime === "pi" ? "~/.pi/agent/sessions" : "~/.dsh/sessions");
+  refsByRuntime.sessions.textContent = status?.sessions_dir ?? descriptor.sessions;
   refsByRuntime.sessions.title = refsByRuntime.sessions.textContent;
   refsByRuntime.action.hidden = phase === "browser";
   refsByRuntime.action.disabled =
@@ -540,6 +574,7 @@ function renderAllIntegrations() {
   renderClaudeIntegration(state.claudeIntegration);
   renderPassiveIntegration("pi", state.piIntegration);
   renderPassiveIntegration("harness", state.harnessIntegration);
+  renderPassiveIntegration("codex", state.codexIntegration);
 }
 
 function mergedRuntimeLogs() {
@@ -548,19 +583,21 @@ function mergedRuntimeLogs() {
     ...(state.claudeIntegration?.logs ?? []),
     ...(state.piIntegration?.logs ?? []),
     ...(state.harnessIntegration?.logs ?? []),
+    ...(state.codexIntegration?.logs ?? []),
   ]
     .sort((left, right) => Number(left.at_ms) - Number(right.at_ms))
     .slice(-160);
 }
 
 function renderRuntimeSources() {
-  const counts = { "deepseek-harness": new Set(), "claude-code": new Set(), pi: new Set() };
+  const counts = { "deepseek-harness": new Set(), "claude-code": new Set(), pi: new Set(), codex: new Set() };
   for (const run of state.catalog?.runs ?? []) {
     counts[run.runtime]?.add(run.source_id);
   }
   refs.runtimeSourceDsh.textContent = String(counts["deepseek-harness"].size);
   refs.runtimeSourceClaude.textContent = String(counts["claude-code"].size);
   refs.runtimeSourcePi.textContent = String(counts.pi.size);
+  refs.runtimeSourceCodex.textContent = String(counts.codex.size);
 }
 
 function renderRuntimeLogs(logs) {
@@ -898,11 +935,7 @@ function renderRunRail() {
 }
 
 function renderSources() {
-  const sourceIds = new Map([
-    ["deepseek-harness", new Set()],
-    ["claude-code", new Set()],
-    ["pi", new Set()],
-  ]);
+  const sourceIds = new Map(registeredRuntimeDescriptors().map(({ id }) => [id, new Set()]));
   for (const run of state.catalog.runs) {
     if (sourceIds.has(run.runtime)) sourceIds.get(run.runtime).add(run.source_id);
   }
@@ -910,6 +943,7 @@ function renderSources() {
     [refs.sourceDsh, refs.sourceCountDsh, sourceIds.get("deepseek-harness").size],
     [refs.sourceClaude, refs.sourceCountClaude, sourceIds.get("claude-code").size],
     [refs.sourcePi, refs.sourceCountPi, sourceIds.get("pi").size],
+    [refs.sourceCodex, refs.sourceCountCodex, sourceIds.get("codex").size],
   ];
   for (const [row, countElement, count] of values) {
     countElement.textContent = String(count);
@@ -1492,15 +1526,11 @@ function primaryState(agent) {
 }
 
 function shortRuntime(runtime) {
-  return runtime === "deepseek-harness" ? "DSH" : runtime === "claude-code" ? "CLAUDE" : "PI";
+  return runtimeDescriptor(runtime).shortLabel;
 }
 
 function runtimeLabel(runtime) {
-  return runtime === "deepseek-harness"
-    ? "DEEPSEEK HARNESS"
-    : runtime === "claude-code"
-      ? "CLAUDE CODE"
-      : "PI";
+  return runtimeDescriptor(runtime).label;
 }
 
 function formatDuration(from, to) {

@@ -134,6 +134,16 @@ impl ManagedObservers {
                     .unwrap_or_else(|| home.join(".dsh/sessions")),
                 state_dir: state_root.join("dsh-auto"),
             },
+            ObserverSpec {
+                label: "CODEX",
+                script_env: "ORCHETRACE_CODEX_AUTO_SCRIPT",
+                script: project_root.join("packages/codex-adapter/src/auto-cli.ts"),
+                directory_flag: "--sessions-dir",
+                sessions_dir: env::var_os("ORCHETRACE_CODEX_SESSIONS_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".codex/sessions")),
+                state_dir: state_root.join("codex-auto"),
+            },
         ];
         let mut attached = Vec::new();
         for observer in observers {

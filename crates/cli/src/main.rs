@@ -665,15 +665,15 @@ fn parse_capture_mode(value: &str) -> Result<CaptureMode, Box<dyn std::error::Er
 }
 
 fn parse_runtime(value: &str) -> Result<RuntimeKind, Box<dyn std::error::Error>> {
-    match value {
-        "claude-code" | "claude" => Ok(RuntimeKind::ClaudeCode),
-        "pi" => Ok(RuntimeKind::Pi),
-        "deepseek-harness" | "harness" | "deepseek" => Ok(RuntimeKind::DeepSeekHarness),
-        _ => Err(format!(
-            "unsupported runtime `{value}`; use claude-code, pi, or deepseek-harness"
-        )
-        .into()),
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(format!("invalid runtime identifier `{value}`").into());
     }
+    Ok(RuntimeKind::from_slug(trimmed))
 }
 
 fn retention_cutoff(value: &str, option: &str) -> Result<String, Box<dyn std::error::Error>> {

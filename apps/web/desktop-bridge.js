@@ -91,6 +91,18 @@ export function stopHarnessAuto(options = {}) {
   return invokeDesktop("stop_harness_auto", options);
 }
 
+export function readCodexIntegrationStatus(options = {}) {
+  return invokeDesktop("codex_integration_status", options);
+}
+
+export function startCodexAuto(options = {}) {
+  return invokeDesktop("start_codex_auto", options);
+}
+
+export function stopCodexAuto(options = {}) {
+  return invokeDesktop("stop_codex_auto", options);
+}
+
 function invokeDesktop(command, options) {
   const invoke = options.invoke === undefined ? globalInvoke() : options.invoke;
   if (!invoke) return Promise.resolve(null);

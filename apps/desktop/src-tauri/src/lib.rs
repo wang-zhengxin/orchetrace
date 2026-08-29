@@ -23,6 +23,7 @@ struct DesktopState {
     claude: ManagedClaude,
     pi: ManagedRuntimeObserver,
     harness: ManagedRuntimeObserver,
+    codex: ManagedRuntimeObserver,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,12 +86,14 @@ fn start_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestS
         let _ = state.claude.start(token);
         let _ = state.pi.start(token);
         let _ = state.harness.start(token);
+        let _ = state.codex.start(token);
     }
     Ok(status)
 }
 
 #[tauri::command]
 fn stop_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
+    let _ = state.codex.stop();
     let _ = state.harness.stop();
     let _ = state.pi.stop();
     let _ = state.claude.stop();
@@ -183,6 +186,30 @@ fn stop_harness_auto(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
     state.harness.stop()
+}
+
+#[tauri::command]
+fn codex_integration_status(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    state.codex.status()
+}
+
+#[tauri::command]
+fn start_codex_auto(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<RuntimeObserverStatus, String> {
+    let ingest = state.ingest.status()?;
+    let token = ingest
+        .connection_token
+        .as_deref()
+        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
+    state.codex.start(token)
+}
+
+#[tauri::command]
+fn stop_codex_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
+    state.codex.stop()
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -356,6 +383,19 @@ pub fn run() {
                 ingest_host: "127.0.0.1".to_owned(),
                 ingest_port: 43117,
             });
+            let codex = ManagedRuntimeObserver::new(RuntimeObserverConfig {
+                runtime: "codex",
+                node_path: resolve_node_path(),
+                auto_script: env::var_os("ORCHETRACE_CODEX_AUTO_SCRIPT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| development_adapter_script("codex-adapter", "auto-cli.ts")),
+                sessions_dir: env::var_os("ORCHETRACE_CODEX_SESSIONS_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| user_home.join(".codex/sessions")),
+                state_dir: app_data_dir.join("codex-auto"),
+                ingest_host: "127.0.0.1".to_owned(),
+                ingest_port: 43117,
+            });
             if env::var("ORCHETRACE_AUTOSTART").as_deref() != Ok("0")
                 && let Ok(status) = ingest.start()
                 && let Some(token) = status.connection_token.as_deref()
@@ -363,6 +403,7 @@ pub fn run() {
                 let _ = claude.start(token);
                 let _ = pi.start(token);
                 let _ = harness.start(token);
+                let _ = codex.start(token);
             }
             app.manage(DesktopState {
                 data_dir,
@@ -371,6 +412,7 @@ pub fn run() {
                 claude,
                 pi,
                 harness,
+                codex,
             });
             Ok(())
         })
@@ -394,7 +436,10 @@ pub fn run() {
             stop_pi_auto,
             harness_integration_status,
             start_harness_auto,
-            stop_harness_auto
+            stop_harness_auto,
+            codex_integration_status,
+            start_codex_auto,
+            stop_codex_auto
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Orchetrace desktop shell");

@@ -501,7 +501,7 @@ fn insert_event_in_transaction(
             source_seq: event.source_seq,
         })?;
     let payload = serde_json::to_string(event)?;
-    let runtime = runtime_slug(&event.runtime);
+    let runtime = event.runtime.as_str();
     let event_type = serde_json::to_string(&event.event_type)?;
     let event_type = event_type.trim_matches('"');
 
@@ -627,14 +627,6 @@ fn resolve_root(
         session = parent.clone();
     }
     session
-}
-
-fn runtime_slug(runtime: &RuntimeKind) -> &'static str {
-    match runtime {
-        RuntimeKind::ClaudeCode => "claude-code",
-        RuntimeKind::Pi => "pi",
-        RuntimeKind::DeepSeekHarness => "deepseek-harness",
-    }
 }
 
 #[cfg(test)]
