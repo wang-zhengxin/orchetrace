@@ -11,9 +11,9 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 ## 终端回放演示
 
-[![OrcheTrace 14-Agent 终端回放](demo/orchetrace-tui-14-agents.png)](demo/orchetrace-tui-14-agents.mp4)
+![OrcheTrace 14-Agent 终端回放关键帧](demo/orchetrace-tui-14-agents-keyframes.gif)
 
-点击封面观看约 34 秒的 14-Agent 实际 TUI 回放：节点按真实时间逐步出现，拓扑缩略图与多行时间泳道同步更新；演示包含播放/暂停、根 Agent 详情、失败节点证据、历史时间点定位、恢复播放及节点侧栏详情。
+动画取自 14-Agent 实际 TUI 回放的 8 个关键帧：节点按真实时间逐步出现，拓扑缩略图与多行时间泳道同步更新，并展示根 Agent 详情、完整拓扑、失败节点证据及节点侧栏详情。
 
 ## 核心能力
 
