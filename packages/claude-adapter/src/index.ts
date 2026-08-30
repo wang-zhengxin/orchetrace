@@ -1,6 +1,17 @@
+import { defineAdapter } from "../../adapter-runtime/src/index.ts";
+import { ClaudeAutoDiscovery } from "./auto-discovery.ts";
+
+export const claudeAdapter = defineAdapter({
+  protocolVersion: 1,
+  runtime: "claude-code",
+  create: (sink, options: import("./auto-discovery.ts").ClaudeAutoDiscoveryOptions) =>
+    new ClaudeAutoDiscovery(sink, options),
+});
+
 export { loadClaudeSession, loadClaudeSources } from "./loader.ts";
 export { ClaudeLiveObserver } from "./live-observer.ts";
-export { ClaudeAutoDiscovery, discoverClaudeTranscripts } from "./auto-discovery.ts";
+export { ClaudeAutoDiscovery };
+export { discoverClaudeTranscripts } from "./auto-discovery.ts";
 export {
   buildClaudeHookCommand,
   installClaudeHooks,

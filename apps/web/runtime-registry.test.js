@@ -6,6 +6,8 @@ import { registeredRuntimeDescriptors, runtimeDescriptor } from "./runtime-regis
 test("registry exposes Codex and stable descriptors for known runtimes", () => {
   assert(registeredRuntimeDescriptors().some((runtime) => runtime.id === "codex"));
   assert.equal(runtimeDescriptor("codex").shortLabel, "CODEX");
+  assert.equal(runtimeDescriptor("openai-codex").id, "codex");
+  assert(runtimeDescriptor("codex").capabilities.includes("subagents"));
 });
 
 test("unknown adapter runtimes remain displayable without a UI release", () => {

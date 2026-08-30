@@ -1,0 +1,74 @@
+{
+  "$schema": "./registry.schema.json",
+  "schema_version": 1,
+  "runtimes": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code",
+      "short_label": "CLAUDE",
+      "accent": "#d6a56f",
+      "aliases": ["claude"],
+      "session_directory": "~/.claude/projects",
+      "capabilities": ["passive", "subagents", "tools", "usage", "hooks"],
+      "observer": {
+        "package": "claude-adapter",
+        "entrypoint": "src/auto-cli.ts",
+        "script_env": "ORCHETRACE_CLAUDE_AUTO_SCRIPT",
+        "sessions_env": "ORCHETRACE_CLAUDE_PROJECTS_DIR",
+        "directory_flag": "--projects-dir",
+        "state_directory": "claude-auto"
+      }
+    },
+    {
+      "id": "pi",
+      "label": "Pi",
+      "short_label": "PI",
+      "accent": "#e4c400",
+      "aliases": [],
+      "session_directory": "~/.pi/agent/sessions",
+      "capabilities": ["passive", "stream", "subagents", "tools", "usage"],
+      "observer": {
+        "package": "pi-adapter",
+        "entrypoint": "src/auto-cli.ts",
+        "script_env": "ORCHETRACE_PI_AUTO_SCRIPT",
+        "sessions_env": "ORCHETRACE_PI_SESSIONS_DIR",
+        "directory_flag": "--sessions-dir",
+        "state_directory": "pi-auto"
+      }
+    },
+    {
+      "id": "deepseek-harness",
+      "label": "DeepSeek Harness",
+      "short_label": "HARNESS",
+      "accent": "#6aa9ff",
+      "aliases": ["harness", "deepseek"],
+      "session_directory": "~/.dsh/sessions",
+      "capabilities": ["passive", "stream", "subagents", "tools", "usage"],
+      "observer": {
+        "package": "dsh-observer",
+        "entrypoint": "src/auto-cli.ts",
+        "script_env": "ORCHETRACE_DSH_AUTO_SCRIPT",
+        "sessions_env": "ORCHETRACE_DSH_SESSIONS_DIR",
+        "directory_flag": "--sessions-dir",
+        "state_directory": "dsh-auto"
+      }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "short_label": "CODEX",
+      "accent": "#72d6a0",
+      "aliases": ["openai-codex"],
+      "session_directory": "~/.codex/sessions",
+      "capabilities": ["passive", "stream", "subagents", "tools", "usage"],
+      "observer": {
+        "package": "codex-adapter",
+        "entrypoint": "src/auto-cli.ts",
+        "script_env": "ORCHETRACE_CODEX_AUTO_SCRIPT",
+        "sessions_env": "ORCHETRACE_CODEX_SESSIONS_DIR",
+        "directory_flag": "--sessions-dir",
+        "state_directory": "codex-auto"
+      }
+    }
+  ]
+}

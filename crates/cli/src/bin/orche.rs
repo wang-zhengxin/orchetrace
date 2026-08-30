@@ -1275,14 +1275,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 }
 
 fn runtime_label(summary: &RunSummary) -> String {
-    match &summary.runtime {
-        orchetrace_protocol::RuntimeKind::ClaudeCode => "CLAUDE",
-        orchetrace_protocol::RuntimeKind::Pi => "PI",
-        orchetrace_protocol::RuntimeKind::DeepSeekHarness => "HARNESS",
-        orchetrace_protocol::RuntimeKind::Codex => "CODEX",
-        orchetrace_protocol::RuntimeKind::Other(value) => value.as_str(),
-    }
-    .to_owned()
+    orchetrace_protocol::runtime_descriptor(summary.runtime.as_str())
+        .map(|descriptor| descriptor.short_label)
+        .unwrap_or_else(|| summary.runtime.as_str())
+        .to_owned()
 }
 
 fn agent_state(agent: &AgentSnapshot) -> &'static str {

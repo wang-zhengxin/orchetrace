@@ -1,7 +1,10 @@
 import { chmod, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
-import type { AcknowledgedCanonicalEventSink } from "../../adapter-runtime/src/index.ts";
+import {
+  readCompleteFileTail,
+  type AcknowledgedCanonicalEventSink,
+} from "../../adapter-runtime/src/index.ts";
 import { identityFromSessionMeta, mapCodexRecord } from "./mapper.ts";
 import { parseCodexRecords, sourceIdFor } from "./loader.ts";
 import type { CodexDiagnostic, CodexSessionIdentity } from "./types.ts";
@@ -83,33 +86,22 @@ export class CodexPassiveObserver {
     if (this.stopped) throw new Error("Codex passive observer is stopped");
     let state = await this.ensureState();
     const metadata = await stat(this.transcriptPath);
-    const identity = `${metadata.dev}:${metadata.ino}`;
-    if (identity !== state.fileIdentity || metadata.size < state.offset) {
-      state = await this.freshState(identity);
+    let tail = await readCompleteFileTail(this.transcriptPath, {
+      path: this.transcriptPath,
+      identity: state.fileIdentity,
+      offset: state.offset,
+      nextLine: state.nextLine,
+      mtimeMs: metadata.mtimeMs,
+    });
+    if (tail.reset) {
+      state = await this.freshState(tail.cursor.identity);
+      tail = await readCompleteFileTail(this.transcriptPath);
     }
-    if (metadata.size === state.offset) {
+    if (!tail.text) {
       return { changed: false, emittedEvents: 0, sessionId: state.identity.sessionId };
     }
-
-    const handle = await open(this.transcriptPath, "r");
-    let bytes: Buffer;
-    try {
-      const length = metadata.size - state.offset;
-      bytes = Buffer.alloc(length);
-      const result = await handle.read(bytes, 0, length, state.offset);
-      bytes = bytes.subarray(0, result.bytesRead);
-    } finally {
-      await handle.close();
-    }
-    const lastNewline = bytes.lastIndexOf(0x0a);
-    if (lastNewline < 0) {
-      return { changed: false, emittedEvents: 0, sessionId: state.identity.sessionId };
-    }
-
-    const consumed = bytes.subarray(0, lastNewline + 1);
-    const text = consumed.toString("utf8");
     const diagnostics: CodexDiagnostic[] = [];
-    const records = parseCodexRecords(text, this.transcriptPath, state.nextLine, diagnostics);
+    const records = parseCodexRecords(tail.text, this.transcriptPath, tail.startLine, diagnostics);
     for (const diagnostic of diagnostics) this.report(diagnostic);
     const events = records.flatMap((record) => mapCodexRecord(record, {
       sourceId: state.sourceId,
@@ -121,8 +113,9 @@ export class CodexPassiveObserver {
 
     const next: CodexPassiveState = {
       ...state,
-      offset: state.offset + consumed.length,
-      nextLine: state.nextLine + countNewlines(consumed),
+      fileIdentity: tail.cursor.identity,
+      offset: tail.cursor.offset,
+      nextLine: tail.cursor.nextLine,
     };
     await saveState(this.options.statePath, next);
     this.state = next;
@@ -183,12 +176,6 @@ async function readIdentity(path: string): Promise<{ identity: CodexSessionIdent
   } finally {
     await handle.close();
   }
-}
-
-function countNewlines(bytes: Buffer): number {
-  let count = 0;
-  for (const byte of bytes) if (byte === 0x0a) count += 1;
-  return count;
 }
 
 function isState(value: unknown): value is CodexPassiveState {

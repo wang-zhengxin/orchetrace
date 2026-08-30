@@ -12,17 +12,20 @@ import {
   readPiIntegrationStatus,
   readHarnessIntegrationStatus,
   readCodexIntegrationStatus,
+  readRuntimeIntegrationStatus,
   readRunSnapshot,
   startManagedIngest,
   startPiAuto,
   startHarnessAuto,
   startCodexAuto,
+  startRuntimeAuto,
   startClaudeAuto,
   stopClaudeAuto,
   stopManagedIngest,
   stopPiAuto,
   stopHarnessAuto,
   stopCodexAuto,
+  stopRuntimeAuto,
 } from "./desktop-bridge.js";
 
 test("native catalog IPC is preferred without issuing an HTTP request", async () => {
@@ -68,6 +71,22 @@ test("Pi, Harness, and Codex passive observers use fixed lifecycle commands", as
     ["codex_integration_status", undefined],
     ["start_codex_auto", undefined],
     ["stop_codex_auto", undefined],
+  ]);
+});
+
+test("external runtime observers use the generic registry lifecycle commands", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    return { runtime: args.runtime, phase: command.startsWith("stop_") ? "stopped" : "running" };
+  };
+  assert.equal((await readRuntimeIntegrationStatus("gemini-cli", { invoke })).runtime, "gemini-cli");
+  assert.equal((await startRuntimeAuto("gemini-cli", { invoke })).phase, "running");
+  assert.equal((await stopRuntimeAuto("gemini-cli", { invoke })).phase, "stopped");
+  assert.deepEqual(calls, [
+    ["runtime_integration_status", { runtime: "gemini-cli" }],
+    ["start_runtime_auto", { runtime: "gemini-cli" }],
+    ["stop_runtime_auto", { runtime: "gemini-cli" }],
   ]);
 });
 

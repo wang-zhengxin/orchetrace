@@ -1,13 +1,23 @@
 import type { Context } from "@deepseek-ai/cordis";
 
 import type { HarnessContextLike, HarnessSessionPersistence } from "./harness-types.ts";
+import { defineAdapter } from "../../adapter-runtime/src/index.ts";
 import { NdjsonTcpSink } from "./ndjson-sink.ts";
+import { DshAutoDiscovery } from "./auto-discovery.ts";
 import { DshObserver } from "./observer.ts";
 
 export const name = "orchetrace-observer";
 export const inject = ["sessions", "agents"];
 
-export { DshAutoDiscovery, discoverDshPersistence } from "./auto-discovery.ts";
+export const deepSeekHarnessAdapter = defineAdapter({
+  protocolVersion: 1,
+  runtime: "deepseek-harness",
+  create: (sink, options: import("./auto-discovery.ts").DshAutoDiscoveryOptions) =>
+    new DshAutoDiscovery(sink, options),
+});
+
+export { DshAutoDiscovery };
+export { discoverDshPersistence } from "./auto-discovery.ts";
 export { loadDshPersistence } from "./persistence-loader.ts";
 export { DshPersistenceObserver } from "./persistence-observer.ts";
 export type {

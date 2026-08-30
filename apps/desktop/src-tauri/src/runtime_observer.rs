@@ -21,6 +21,7 @@ pub struct RuntimeObserverConfig {
     pub runtime: &'static str,
     pub node_path: PathBuf,
     pub auto_script: PathBuf,
+    pub directory_flag: &'static str,
     pub sessions_dir: PathBuf,
     pub state_dir: PathBuf,
     pub ingest_host: String,
@@ -87,7 +88,7 @@ impl ManagedRuntimeObserver {
             .map_err(|error| format!("{}: {error}", self.config.state_dir.display()))?;
         let mut child = Command::new(&self.config.node_path)
             .arg(&self.config.auto_script)
-            .arg("--sessions-dir")
+            .arg(self.config.directory_flag)
             .arg(&self.config.sessions_dir)
             .arg("--state-dir")
             .arg(&self.config.state_dir)
@@ -314,6 +315,7 @@ mod tests {
             runtime: "pi",
             node_path: PathBuf::from("/definitely/missing/node"),
             auto_script: PathBuf::from("/definitely/missing/auto.ts"),
+            directory_flag: "--sessions-dir",
             sessions_dir: PathBuf::from("sessions"),
             state_dir: PathBuf::from("state"),
             ingest_host: "127.0.0.1".to_owned(),

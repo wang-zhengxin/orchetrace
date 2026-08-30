@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchetrace.dev/schemas/runtime-registry-v1.json",
+  "title": "Orchetrace Runtime Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runtimes"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "const": 1 },
+    "runtimes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/runtime" }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "short_label", "accent", "aliases", "session_directory", "capabilities", "observer"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "label": { "type": "string", "minLength": 1 },
+        "short_label": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "aliases": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, "uniqueItems": true },
+        "session_directory": { "type": "string", "minLength": 1 },
+        "capabilities": {
+          "type": "array",
+          "items": { "enum": ["passive", "stream", "subagents", "tools", "usage", "hooks"] },
+          "uniqueItems": true
+        },
+        "observer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["package", "entrypoint", "script_env", "sessions_env", "directory_flag", "state_directory"],
+          "properties": {
+            "package": { "type": "string", "minLength": 1 },
+            "entrypoint": { "type": "string", "minLength": 1 },
+            "script_env": { "type": "string", "pattern": "^ORCHETRACE_[A-Z0-9_]+$" },
+            "sessions_env": { "type": "string", "pattern": "^ORCHETRACE_[A-Z0-9_]+$" },
+            "directory_flag": { "type": "string", "pattern": "^--[a-z-]+$" },
+            "state_directory": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+          }
+        }
+      }
+    }
+  }
+}

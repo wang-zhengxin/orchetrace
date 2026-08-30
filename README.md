@@ -268,6 +268,30 @@ npm run dsh:auto
 
 token 可以通过插件的 `config.token` 提供，也可以从 `ORCHETRACE_TOKEN` 环境变量读取。Observer 会组合实时事件与可用的冷 session persistence，并在断线后重发未确认事件。若覆盖 `sourceId`，被动 watcher 与插件会形成两个独立来源；需要合并时请保持 `dsh-local`。
 
+## 扩展 Runtime Adapter
+
+内置 Runtime 的名称、别名、颜色、能力、默认会话目录和 Observer 启动参数只有一个来源：`runtimes/registry.json`。修改清单后运行：
+
+```bash
+npm run runtime:generate
+npm run runtime:check
+```
+
+生成器会同步 TypeScript、Web 和 Rust Registry；生成文件带有 `@generated` 标记，不应直接编辑。终端 `orche` 会从生成的 Rust Registry 启动所有可用 Observer，Web 诊断抽屉也会根据 Registry 和实际 Catalog 动态显示数据来源。
+
+`@orchetrace/adapter-runtime` 提供 `defineAdapter`、统一被动 Observer 生命周期、内存 Sink 和事件一致性检查。一个 Adapter 至少需要实现：
+
+```ts
+export const adapter = defineAdapter({
+  protocolVersion: 1,
+  runtime: "my-runtime",
+  descriptor,
+  create: (sink, options) => new MyPassiveObserver(sink, options),
+});
+```
+
+Observer 暴露 `start()`、`scanOnce()` 和 `stop()`；Canonical Event 必须保证 `event_id` 唯一、同一 `source_id` 的 `source_seq` 单调递增，并在 Rust ACK 后再持久化读取游标。`packages/synthetic-adapter` 是不修改 Rust Runtime 枚举即可接入和生成子 Agent/工具事件的最小示例，兼容性测试位于 `packages/adapter-runtime/test`。
+
 ## 桌面开发
 
 ```bash
@@ -278,7 +302,7 @@ npm run desktop:check
 npm run desktop:dev
 ```
 
-桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness 三个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
+桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness、Codex 四个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
 
 ## 验证
 
@@ -303,6 +327,7 @@ scripts/benchmark-100k.sh --output /tmp/orchetrace-benchmark-100k.json
 ```text
 crates/                       Rust protocol、core、ingest、storage 和 CLI
 packages/                     TypeScript runtime adapters 与共享协议
+runtimes/                     Runtime Manifest、能力和 Observer 启动声明
 apps/web/                     Web 工作台
 apps/desktop/                 Tauri 2 桌面壳
 schemas/                      Canonical Event JSON Schema

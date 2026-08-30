@@ -103,10 +103,22 @@ export function stopCodexAuto(options = {}) {
   return invokeDesktop("stop_codex_auto", options);
 }
 
-function invokeDesktop(command, options) {
+export function readRuntimeIntegrationStatus(runtime, options = {}) {
+  return invokeDesktop("runtime_integration_status", options, { runtime });
+}
+
+export function startRuntimeAuto(runtime, options = {}) {
+  return invokeDesktop("start_runtime_auto", options, { runtime });
+}
+
+export function stopRuntimeAuto(runtime, options = {}) {
+  return invokeDesktop("stop_runtime_auto", options, { runtime });
+}
+
+function invokeDesktop(command, options, args) {
   const invoke = options.invoke === undefined ? globalInvoke() : options.invoke;
   if (!invoke) return Promise.resolve(null);
-  return invoke(command);
+  return invoke(command, args);
 }
 
 export function readCatalog(options) {

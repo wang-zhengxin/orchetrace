@@ -3,11 +3,35 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+mod generated_runtime_registry;
 mod privacy;
 
+pub use generated_runtime_registry::{REGISTERED_RUNTIMES, runtime_descriptor};
 pub use privacy::{CaptureMode, OMITTED_VALUE, PrivacyPolicy, REDACTED_VALUE, SanitizationReport};
 
 pub const SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeObserverDescriptor {
+    pub package: &'static str,
+    pub entrypoint: &'static str,
+    pub script_env: &'static str,
+    pub sessions_env: &'static str,
+    pub directory_flag: &'static str,
+    pub state_directory: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeDescriptor {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub short_label: &'static str,
+    pub accent: &'static str,
+    pub aliases: &'static [&'static str],
+    pub session_directory: &'static str,
+    pub capabilities: &'static [&'static str],
+    pub observer: RuntimeObserverDescriptor,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CanonicalEvent {
@@ -79,12 +103,15 @@ pub enum RuntimeKind {
 impl RuntimeKind {
     pub fn from_slug(value: impl Into<String>) -> Self {
         let value = value.into();
-        match value.as_str() {
+        let canonical = runtime_descriptor(&value)
+            .map(|descriptor| descriptor.id)
+            .unwrap_or(value.as_str());
+        match canonical {
             "claude-code" | "claude" => Self::ClaudeCode,
             "pi" => Self::Pi,
             "deepseek-harness" | "harness" | "deepseek" => Self::DeepSeekHarness,
             "codex" | "openai-codex" => Self::Codex,
-            _ => Self::Other(value),
+            _ => Self::Other(canonical.to_owned()),
         }
     }
 

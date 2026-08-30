@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -21,9 +22,7 @@ struct DesktopState {
     legacy_snapshot: PathBuf,
     ingest: ManagedIngest,
     claude: ManagedClaude,
-    pi: ManagedRuntimeObserver,
-    harness: ManagedRuntimeObserver,
-    codex: ManagedRuntimeObserver,
+    observers: BTreeMap<&'static str, ManagedRuntimeObserver>,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,18 +83,18 @@ fn start_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestS
     let status = state.ingest.start()?;
     if let Some(token) = status.connection_token.as_deref() {
         let _ = state.claude.start(token);
-        let _ = state.pi.start(token);
-        let _ = state.harness.start(token);
-        let _ = state.codex.start(token);
+        for observer in state.observers.values() {
+            let _ = observer.start(token);
+        }
     }
     Ok(status)
 }
 
 #[tauri::command]
 fn stop_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
-    let _ = state.codex.stop();
-    let _ = state.harness.stop();
-    let _ = state.pi.stop();
+    for observer in state.observers.values().rev() {
+        let _ = observer.stop();
+    }
     let _ = state.claude.stop();
     state.ingest.stop()
 }
@@ -144,72 +143,111 @@ fn disable_claude_hooks(
 fn pi_integration_status(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
-    state.pi.status()
+    runtime_status(&state, "pi")
 }
 
 #[tauri::command]
 fn start_pi_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
-    let ingest = state.ingest.status()?;
-    let token = ingest
-        .connection_token
-        .as_deref()
-        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
-    state.pi.start(token)
+    start_runtime(&state, "pi")
 }
 
 #[tauri::command]
 fn stop_pi_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
-    state.pi.stop()
+    stop_runtime(&state, "pi")
 }
 
 #[tauri::command]
 fn harness_integration_status(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
-    state.harness.status()
+    runtime_status(&state, "deepseek-harness")
 }
 
 #[tauri::command]
 fn start_harness_auto(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
-    let ingest = state.ingest.status()?;
-    let token = ingest
-        .connection_token
-        .as_deref()
-        .ok_or_else(|| "start the managed ingest service first".to_owned())?;
-    state.harness.start(token)
+    start_runtime(&state, "deepseek-harness")
 }
 
 #[tauri::command]
 fn stop_harness_auto(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
-    state.harness.stop()
+    stop_runtime(&state, "deepseek-harness")
 }
 
 #[tauri::command]
 fn codex_integration_status(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
-    state.codex.status()
+    runtime_status(&state, "codex")
 }
 
 #[tauri::command]
 fn start_codex_auto(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<RuntimeObserverStatus, String> {
+    start_runtime(&state, "codex")
+}
+
+#[tauri::command]
+fn stop_codex_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
+    stop_runtime(&state, "codex")
+}
+
+#[tauri::command]
+fn runtime_integration_status(
+    state: tauri::State<'_, DesktopState>,
+    runtime: String,
+) -> Result<RuntimeObserverStatus, String> {
+    runtime_status(&state, &runtime)
+}
+
+#[tauri::command]
+fn start_runtime_auto(
+    state: tauri::State<'_, DesktopState>,
+    runtime: String,
+) -> Result<RuntimeObserverStatus, String> {
+    start_runtime(&state, &runtime)
+}
+
+#[tauri::command]
+fn stop_runtime_auto(
+    state: tauri::State<'_, DesktopState>,
+    runtime: String,
+) -> Result<RuntimeObserverStatus, String> {
+    stop_runtime(&state, &runtime)
+}
+
+fn runtime_observer<'a>(
+    state: &'a DesktopState,
+    runtime: &str,
+) -> Result<&'a ManagedRuntimeObserver, String> {
+    let canonical = orchetrace_protocol::runtime_descriptor(runtime)
+        .map(|descriptor| descriptor.id)
+        .unwrap_or(runtime);
+    state
+        .observers
+        .get(canonical)
+        .ok_or_else(|| format!("managed observer {runtime} is unavailable"))
+}
+
+fn runtime_status(state: &DesktopState, runtime: &str) -> Result<RuntimeObserverStatus, String> {
+    runtime_observer(state, runtime)?.status()
+}
+
+fn start_runtime(state: &DesktopState, runtime: &str) -> Result<RuntimeObserverStatus, String> {
     let ingest = state.ingest.status()?;
     let token = ingest
         .connection_token
         .as_deref()
         .ok_or_else(|| "start the managed ingest service first".to_owned())?;
-    state.codex.start(token)
+    runtime_observer(state, runtime)?.start(token)
 }
 
-#[tauri::command]
-fn stop_codex_auto(state: tauri::State<'_, DesktopState>) -> Result<RuntimeObserverStatus, String> {
-    state.codex.stop()
+fn stop_runtime(state: &DesktopState, runtime: &str) -> Result<RuntimeObserverStatus, String> {
+    runtime_observer(state, runtime)?.stop()
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -293,12 +331,49 @@ fn development_claude_script(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn development_adapter_script(package: &str, name: &str) -> PathBuf {
+fn development_adapter_entry(package: &str, entrypoint: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../packages")
         .join(package)
-        .join("src")
-        .join(name)
+        .join(entrypoint)
+}
+
+fn expand_home(value: &str, home: &Path) -> PathBuf {
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    value
+        .strip_prefix("~/")
+        .map(|relative| home.join(relative))
+        .unwrap_or_else(|| PathBuf::from(value))
+}
+
+fn runtime_observer_config(
+    runtime: &'static str,
+    app_data_dir: &Path,
+    user_home: &Path,
+) -> Result<RuntimeObserverConfig, String> {
+    let descriptor = orchetrace_protocol::runtime_descriptor(runtime)
+        .ok_or_else(|| format!("runtime descriptor {runtime} is unavailable"))?;
+    Ok(RuntimeObserverConfig {
+        runtime: descriptor.id,
+        node_path: resolve_node_path(),
+        auto_script: env::var_os(descriptor.observer.script_env)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                development_adapter_entry(
+                    descriptor.observer.package,
+                    descriptor.observer.entrypoint,
+                )
+            }),
+        directory_flag: descriptor.observer.directory_flag,
+        sessions_dir: env::var_os(descriptor.observer.sessions_env)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| expand_home(descriptor.session_directory, user_home)),
+        state_dir: app_data_dir.join(descriptor.observer.state_directory),
+        ingest_host: "127.0.0.1".to_owned(),
+        ingest_port: 43117,
+    })
 }
 
 fn home_dir() -> PathBuf {
@@ -340,79 +415,53 @@ pub fn run() {
                 web_origin: desktop_web_origin(),
             });
             let user_home = home_dir();
+            let claude_runtime = orchetrace_protocol::runtime_descriptor("claude-code")
+                .ok_or("Claude runtime descriptor is unavailable")?;
             let claude = ManagedClaude::new(ClaudeConfig {
                 node_path: resolve_node_path(),
-                auto_script: env::var_os("ORCHETRACE_CLAUDE_AUTO_SCRIPT")
+                auto_script: env::var_os(claude_runtime.observer.script_env)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| development_claude_script("auto-cli.ts")),
+                    .unwrap_or_else(|| {
+                        development_adapter_entry(
+                            claude_runtime.observer.package,
+                            claude_runtime.observer.entrypoint,
+                        )
+                    }),
                 hook_script: env::var_os("ORCHETRACE_CLAUDE_HOOK_SCRIPT")
                     .map(PathBuf::from)
                     .unwrap_or_else(|| development_claude_script("hook-cli.ts")),
-                projects_dir: env::var_os("ORCHETRACE_CLAUDE_PROJECTS_DIR")
+                projects_dir: env::var_os(claude_runtime.observer.sessions_env)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| user_home.join(".claude/projects")),
-                state_dir: app_data_dir.join("claude-auto"),
+                    .unwrap_or_else(|| expand_home(claude_runtime.session_directory, &user_home)),
+                state_dir: app_data_dir.join(claude_runtime.observer.state_directory),
                 hook_events_path: user_home.join(".orchetrace/claude-hooks.jsonl"),
                 settings_path: user_home.join(".claude/settings.json"),
                 ingest_host: "127.0.0.1".to_owned(),
                 ingest_port: 43117,
             });
-            let pi = ManagedRuntimeObserver::new(RuntimeObserverConfig {
-                runtime: "pi",
-                node_path: resolve_node_path(),
-                auto_script: env::var_os("ORCHETRACE_PI_AUTO_SCRIPT")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| development_adapter_script("pi-adapter", "auto-cli.ts")),
-                sessions_dir: env::var_os("ORCHETRACE_PI_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| user_home.join(".pi/agent/sessions")),
-                state_dir: app_data_dir.join("pi-auto"),
-                ingest_host: "127.0.0.1".to_owned(),
-                ingest_port: 43117,
-            });
-            let harness = ManagedRuntimeObserver::new(RuntimeObserverConfig {
-                runtime: "deepseek-harness",
-                node_path: resolve_node_path(),
-                auto_script: env::var_os("ORCHETRACE_DSH_AUTO_SCRIPT")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| development_adapter_script("dsh-observer", "auto-cli.ts")),
-                sessions_dir: env::var_os("ORCHETRACE_DSH_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| user_home.join(".dsh/sessions")),
-                state_dir: app_data_dir.join("dsh-auto"),
-                ingest_host: "127.0.0.1".to_owned(),
-                ingest_port: 43117,
-            });
-            let codex = ManagedRuntimeObserver::new(RuntimeObserverConfig {
-                runtime: "codex",
-                node_path: resolve_node_path(),
-                auto_script: env::var_os("ORCHETRACE_CODEX_AUTO_SCRIPT")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| development_adapter_script("codex-adapter", "auto-cli.ts")),
-                sessions_dir: env::var_os("ORCHETRACE_CODEX_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| user_home.join(".codex/sessions")),
-                state_dir: app_data_dir.join("codex-auto"),
-                ingest_host: "127.0.0.1".to_owned(),
-                ingest_port: 43117,
-            });
+            let observers = orchetrace_protocol::REGISTERED_RUNTIMES
+                .iter()
+                .filter(|descriptor| descriptor.id != "claude-code")
+                .map(|descriptor| {
+                    runtime_observer_config(descriptor.id, &app_data_dir, &user_home)
+                        .map(|config| (descriptor.id, ManagedRuntimeObserver::new(config)))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
             if env::var("ORCHETRACE_AUTOSTART").as_deref() != Ok("0")
                 && let Ok(status) = ingest.start()
                 && let Some(token) = status.connection_token.as_deref()
             {
                 let _ = claude.start(token);
-                let _ = pi.start(token);
-                let _ = harness.start(token);
-                let _ = codex.start(token);
+                for observer in observers.values() {
+                    let _ = observer.start(token);
+                }
             }
             app.manage(DesktopState {
                 data_dir,
                 legacy_snapshot,
                 ingest,
                 claude,
-                pi,
-                harness,
-                codex,
+                observers,
             });
             Ok(())
         })
@@ -439,7 +488,10 @@ pub fn run() {
             stop_harness_auto,
             codex_integration_status,
             start_codex_auto,
-            stop_codex_auto
+            stop_codex_auto,
+            runtime_integration_status,
+            start_runtime_auto,
+            stop_runtime_auto
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Orchetrace desktop shell");

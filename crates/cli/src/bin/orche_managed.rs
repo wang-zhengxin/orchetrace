@@ -103,48 +103,22 @@ impl ManagedObservers {
             .map(PathBuf::from)
             .ok_or("HOME is unavailable")?;
 
-        let observers = [
-            ObserverSpec {
-                label: "CLAUDE",
-                script_env: "ORCHETRACE_CLAUDE_AUTO_SCRIPT",
-                script: project_root.join("packages/claude-adapter/src/auto-cli.ts"),
-                directory_flag: "--projects-dir",
-                sessions_dir: env::var_os("ORCHETRACE_CLAUDE_PROJECTS_DIR")
+        let observers = orchetrace_protocol::REGISTERED_RUNTIMES
+            .iter()
+            .map(|runtime| ObserverSpec {
+                label: runtime.short_label,
+                script_env: runtime.observer.script_env,
+                script: project_root
+                    .join("packages")
+                    .join(runtime.observer.package)
+                    .join(runtime.observer.entrypoint),
+                directory_flag: runtime.observer.directory_flag,
+                sessions_dir: env::var_os(runtime.observer.sessions_env)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".claude/projects")),
-                state_dir: state_root.join("claude-auto"),
-            },
-            ObserverSpec {
-                label: "PI",
-                script_env: "ORCHETRACE_PI_AUTO_SCRIPT",
-                script: project_root.join("packages/pi-adapter/src/auto-cli.ts"),
-                directory_flag: "--sessions-dir",
-                sessions_dir: env::var_os("ORCHETRACE_PI_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".pi/agent/sessions")),
-                state_dir: state_root.join("pi-auto"),
-            },
-            ObserverSpec {
-                label: "HARNESS",
-                script_env: "ORCHETRACE_DSH_AUTO_SCRIPT",
-                script: project_root.join("packages/dsh-observer/src/auto-cli.ts"),
-                directory_flag: "--sessions-dir",
-                sessions_dir: env::var_os("ORCHETRACE_DSH_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".dsh/sessions")),
-                state_dir: state_root.join("dsh-auto"),
-            },
-            ObserverSpec {
-                label: "CODEX",
-                script_env: "ORCHETRACE_CODEX_AUTO_SCRIPT",
-                script: project_root.join("packages/codex-adapter/src/auto-cli.ts"),
-                directory_flag: "--sessions-dir",
-                sessions_dir: env::var_os("ORCHETRACE_CODEX_SESSIONS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".codex/sessions")),
-                state_dir: state_root.join("codex-auto"),
-            },
-        ];
+                    .unwrap_or_else(|| expand_home(runtime.session_directory, &home)),
+                state_dir: state_root.join(runtime.observer.state_directory),
+            })
+            .collect::<Vec<_>>();
         let mut attached = Vec::new();
         for observer in observers {
             let script = env::var_os(observer.script_env)
@@ -217,6 +191,16 @@ struct ObserverSpec {
     directory_flag: &'static str,
     sessions_dir: PathBuf,
     state_dir: PathBuf,
+}
+
+fn expand_home(value: &str, home: &Path) -> PathBuf {
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    value
+        .strip_prefix("~/")
+        .map(|relative| home.join(relative))
+        .unwrap_or_else(|| PathBuf::from(value))
 }
 
 fn endpoint_is_ready(address: SocketAddr) -> bool {

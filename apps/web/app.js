@@ -159,10 +159,7 @@ const refs = Object.fromEntries(
     "runtime-data-dir",
     "runtime-token-value",
     "runtime-token-copy",
-    "runtime-source-dsh",
-    "runtime-source-claude",
-    "runtime-source-pi",
-    "runtime-source-codex",
+    "runtime-source-grid",
     "runtime-log-list",
   ].map((id) => [camel(id), document.getElementById(id)]),
 );
@@ -590,14 +587,27 @@ function mergedRuntimeLogs() {
 }
 
 function renderRuntimeSources() {
-  const counts = { "deepseek-harness": new Set(), "claude-code": new Set(), pi: new Set(), codex: new Set() };
+  const descriptors = new Map(registeredRuntimeDescriptors().map((descriptor) => [descriptor.id, descriptor]));
+  const counts = new Map([...descriptors.keys()].map((runtime) => [runtime, new Set()]));
   for (const run of state.catalog?.runs ?? []) {
-    counts[run.runtime]?.add(run.source_id);
+    if (!descriptors.has(run.runtime)) descriptors.set(run.runtime, runtimeDescriptor(run.runtime));
+    if (!counts.has(run.runtime)) counts.set(run.runtime, new Set());
+    counts.get(run.runtime).add(run.source_id);
   }
-  refs.runtimeSourceDsh.textContent = String(counts["deepseek-harness"].size);
-  refs.runtimeSourceClaude.textContent = String(counts["claude-code"].size);
-  refs.runtimeSourcePi.textContent = String(counts.pi.size);
-  refs.runtimeSourceCodex.textContent = String(counts.codex.size);
+  refs.runtimeSourceGrid.replaceChildren();
+  for (const descriptor of descriptors.values()) {
+    const item = document.createElement("div");
+    const glyph = document.createElement("span");
+    glyph.className = "source-glyph";
+    glyph.textContent = descriptor.shortLabel.slice(0, 2);
+    glyph.style.color = descriptor.accent;
+    const label = document.createElement("strong");
+    label.textContent = descriptor.label;
+    const count = document.createElement("b");
+    count.textContent = String(counts.get(descriptor.id)?.size ?? 0);
+    item.append(glyph, label, count);
+    refs.runtimeSourceGrid.append(item);
+  }
 }
 
 function renderRuntimeLogs(logs) {

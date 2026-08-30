@@ -8,6 +8,8 @@
     "apps/*"
   ],
   "scripts": {
+    "runtime:generate": "node scripts/generate-runtime-registry.mjs",
+    "runtime:check": "node scripts/generate-runtime-registry.mjs --check",
     "fixture:dsh": "node packages/dsh-observer/src/generate-fixture.ts",
     "fixture:demo": "node packages/dsh-observer/src/generate-demo.ts",
     "fixture:claude": "node packages/claude-adapter/src/generate-fixture.ts",
@@ -22,6 +24,7 @@
     "pi:live": "node packages/pi-adapter/src/live-cli.ts",
     "pi:auto": "node packages/pi-adapter/src/auto-cli.ts",
     "codex:auto": "node packages/codex-adapter/src/auto-cli.ts",
+    "test:runtime-sdk": "node --test packages/adapter-runtime/test/*.test.ts",
     "test:adapter": "node --test packages/dsh-observer/test/*.test.ts",
     "test:claude": "node --test packages/claude-adapter/test/*.test.ts",
     "test:pi": "node --test packages/pi-adapter/test/*.test.ts",
@@ -33,6 +36,6 @@
     "desktop:check": "node scripts/run-desktop.mjs check",
     "tui": "cargo run -q -p orchetrace-cli --bin orche --",
     "dev:web": "node scripts/dev-server.mjs",
-    "check": "npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:codex && npm run test:pi-extension && npm run test:web"
+    "check": "npm run runtime:check && npm run test:runtime-sdk && npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:codex && npm run test:pi-extension && npm run test:web"
   }
 }
