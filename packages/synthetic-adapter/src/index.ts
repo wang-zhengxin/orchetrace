@@ -61,9 +61,12 @@ class SyntheticObserver implements PassiveRuntimeObserver {
     const observedAt = this.options.now ?? "2026-01-01T00:00:00.000Z";
     const events: CanonicalEvent[] = [
       event(sourceId, sessionId, 1, "session.discovered", observedAt, { label: "Synthetic run" }),
-      event(sourceId, sessionId, 2, "agent.spawned", observedAt, { agent_id: sessionId, role: "orchestrator" }),
+      event(sourceId, sessionId, 2, "agent.status_changed", observedAt, { status: "running" }),
       event(sourceId, "synthetic-child", 3, "agent.spawned", observedAt, { agent_id: "synthetic-child", role: "worker" }, sessionId),
-      event(sourceId, "synthetic-child", 4, "tool.started", observedAt, { tool_name: "fixture" }, sessionId),
+      event(sourceId, "synthetic-child", 4, "tool.started", observedAt, {
+        call_id: "fixture-1",
+        name: "fixture",
+      }, sessionId),
     ];
     for (const item of events) await this.sink.write(item);
     await this.sink.whenIdle();

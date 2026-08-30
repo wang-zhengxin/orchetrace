@@ -538,7 +538,23 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .runtime-logs li time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .runtime-logs li b { overflow: hidden; color: var(--ready); font-weight: 500; text-overflow: ellipsis; }
 .runtime-logs li span { overflow-wrap: anywhere; }
+.runtime-logs li.severity-warning { color: #b7a45d; }
+.runtime-logs li.severity-warning b { color: var(--running); }
+.runtime-logs li.severity-error { color: #d78b7e; }
+.runtime-logs li.severity-error b { color: var(--failed); }
 .runtime-logs li.runtime-log-empty { display: block; color: var(--text-dim); border-bottom: 0; }
+
+.runtime-phase.warning,
+.runtime-mini-phase.warning { color: var(--running); }
+.runtime-phase.warning i,
+.runtime-mini-phase.warning i { background: var(--running); box-shadow: 0 0 0 3px rgb(226 192 68 / 12%); }
+.runtime-phase.degraded,
+.runtime-mini-phase.degraded { color: var(--failed); }
+.runtime-phase.degraded i,
+.runtime-mini-phase.degraded i { background: var(--failed); box-shadow: 0 0 0 3px rgb(222 111 94 / 12%); }
+.runtime-section-heading small.severity-healthy { color: var(--succeeded); }
+.runtime-section-heading small.severity-warning { color: var(--running); }
+.runtime-section-heading small.severity-error { color: var(--failed); }
 
 @keyframes drawer-in { from { opacity: 0; transform: translateX(18px); } }
 @keyframes scrim-in { from { opacity: 0; } }

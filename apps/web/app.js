@@ -4,6 +4,11 @@ import { compactTimelineMarkers, indexTimelineBySession } from "./timeline-index
 import { loadTimelinePages } from "./timeline-pages.js";
 import { runtimeDescriptor, registeredRuntimeDescriptors } from "./runtime-registry.js";
 import {
+  aggregateRuntimeDiagnostics,
+  diagnosticSuffix,
+  runtimeVisualState,
+} from "./runtime-diagnostics.js";
+import {
   disableClaudeHooks,
   enableClaudeHooks,
   readCatalog,
@@ -164,6 +169,7 @@ const refs = Object.fromEntries(
     "runtime-token-value",
     "runtime-token-copy",
     "runtime-source-grid",
+    "runtime-diagnostic-count",
     "runtime-log-list",
   ].map((id) => [camel(id), document.getElementById(id)]),
 );
@@ -444,16 +450,18 @@ async function copyManagedToken() {
 }
 
 function renderManagedIngest(status) {
-  const phase = status?.phase ?? "browser";
+  const { phase, visual } = runtimeVisualState(status);
   const labels = {
     running: "RUNNING",
+    warning: "WARNING",
+    degraded: "DEGRADED",
     stopped: "STOPPED",
     exited: "EXITED",
     unavailable: "UNAVAILABLE",
     browser: "BROWSER MODE",
   };
-  refs.runtimePhase.className = `runtime-phase ${phase}`;
-  refs.runtimePhase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
+  refs.runtimePhase.className = `runtime-phase ${visual}`;
+  refs.runtimePhase.querySelector("b").textContent = labels[visual] ?? visual.toUpperCase();
 
   const summaries = {
     running: "Local ingest owns the loopback fact and live-update endpoints.",
@@ -462,7 +470,7 @@ function renderManagedIngest(status) {
     unavailable: "Build the otrace sidecar or configure ORCHETRACE_CLI_PATH.",
     browser: "Runtime lifecycle controls are available in the Tauri desktop shell.",
   };
-  refs.runtimeSummary.textContent = summaries[phase] ?? "Runtime state is unavailable.";
+  refs.runtimeSummary.textContent = `${summaries[phase] ?? "Runtime state is unavailable."}${diagnosticSuffix(status)}`;
 
   const running = phase === "running";
   refs.managedIngestAction.hidden = phase === "browser";
@@ -486,16 +494,18 @@ function renderManagedIngest(status) {
 }
 
 function renderClaudeIntegration(status) {
-  const phase = status?.phase ?? "browser";
+  const { phase, visual } = runtimeVisualState(status);
   const labels = {
     running: "WATCHING",
+    warning: "WARNING",
+    degraded: "DEGRADED",
     stopped: "STOPPED",
     exited: "EXITED",
     unavailable: "UNAVAILABLE",
     browser: "DESKTOP ONLY",
   };
-  refs.claudeAutoPhase.className = `runtime-mini-phase ${phase}`;
-  refs.claudeAutoPhase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
+  refs.claudeAutoPhase.className = `runtime-mini-phase ${visual}`;
+  refs.claudeAutoPhase.querySelector("b").textContent = labels[visual] ?? visual.toUpperCase();
   const summaries = {
     running: status?.hooks_installed
       ? "Active sessions and lifecycle hooks are being observed."
@@ -505,7 +515,7 @@ function renderClaudeIntegration(status) {
     unavailable: "Node.js or the Claude adapter sidecar is unavailable.",
     browser: "Claude auto-discovery is managed by the Tauri desktop shell.",
   };
-  refs.claudeAutoSummary.textContent = summaries[phase] ?? "Claude integration status is unavailable.";
+  refs.claudeAutoSummary.textContent = `${summaries[phase] ?? "Claude integration status is unavailable."}${diagnosticSuffix(status)}`;
   refs.claudeAutoProjects.textContent = status?.projects_dir ?? "~/.claude/projects";
   refs.claudeAutoProjects.title = refs.claudeAutoProjects.textContent;
   refs.claudeAutoAction.hidden = phase === "browser";
@@ -540,16 +550,18 @@ function renderPassiveIntegration(runtime, status) {
     },
   }[runtime];
   if (!refsByRuntime) return;
-  const phase = status?.phase ?? "browser";
+  const { phase, visual } = runtimeVisualState(status);
   const labels = {
     running: "WATCHING",
+    warning: "WARNING",
+    degraded: "DEGRADED",
     stopped: "STOPPED",
     exited: "EXITED",
     unavailable: "UNAVAILABLE",
     browser: "DESKTOP ONLY",
   };
-  refsByRuntime.phase.className = `runtime-mini-phase ${phase}`;
-  refsByRuntime.phase.querySelector("b").textContent = labels[phase] ?? phase.toUpperCase();
+  refsByRuntime.phase.className = `runtime-mini-phase ${visual}`;
+  refsByRuntime.phase.querySelector("b").textContent = labels[visual] ?? visual.toUpperCase();
   const descriptor = runtimeDescriptor(runtime === "harness" ? "deepseek-harness" : runtime);
   const name = descriptor.label;
   const summaries = {
@@ -563,7 +575,7 @@ function renderPassiveIntegration(runtime, status) {
     unavailable: `Node.js or the ${name} adapter sidecar is unavailable.`,
     browser: `${name} auto-discovery is managed by the Tauri desktop shell.`,
   };
-  refsByRuntime.summary.textContent = summaries[phase] ?? `${name} integration status is unavailable.`;
+  refsByRuntime.summary.textContent = `${summaries[phase] ?? `${name} integration status is unavailable.`}${diagnosticSuffix(status)}`;
   refsByRuntime.sessions.textContent = status?.sessions_dir ?? descriptor.sessions;
   refsByRuntime.sessions.title = refsByRuntime.sessions.textContent;
   refsByRuntime.action.hidden = phase === "browser";
@@ -618,6 +630,23 @@ function renderRuntimeSources() {
 
 function renderRuntimeLogs(logs) {
   refs.runtimeLogList.replaceChildren();
+  const totals = aggregateRuntimeDiagnostics([
+    state.managedIngest,
+    state.claudeIntegration,
+    state.piIntegration,
+    state.harnessIntegration,
+    state.codexIntegration,
+  ]);
+  refs.runtimeDiagnosticCount.textContent = totals.errorCount > 0
+    ? `${totals.errorCount} ERR · ${totals.warningCount} WARN`
+    : totals.warningCount > 0
+      ? `${totals.warningCount} WARN`
+      : "HEALTHY";
+  refs.runtimeDiagnosticCount.className = totals.errorCount > 0
+    ? "severity-error"
+    : totals.warningCount > 0
+      ? "severity-warning"
+      : "severity-healthy";
   if (logs.length === 0) {
     const empty = document.createElement("li");
     empty.className = "runtime-log-empty";
@@ -627,10 +656,12 @@ function renderRuntimeLogs(logs) {
   }
   for (const log of logs.slice().reverse()) {
     const item = document.createElement("li");
+    item.className = `severity-${log.severity ?? "info"}`;
     const time = document.createElement("time");
     time.textContent = formatClock(Number(log.at_ms));
     const stream = document.createElement("b");
-    stream.textContent = log.stream;
+    stream.textContent = log.code ?? log.stream;
+    stream.title = [log.stream, log.location].filter(Boolean).join(" · ");
     const message = document.createElement("span");
     message.textContent = log.message;
     item.append(time, stream, message);

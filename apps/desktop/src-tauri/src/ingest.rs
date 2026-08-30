@@ -31,7 +31,63 @@ pub struct IngestConfig {
 pub struct DiagnosticLine {
     pub at_ms: u128,
     pub stream: String,
+    pub severity: String,
+    pub code: Option<String>,
+    pub location: Option<String>,
     pub message: String,
+}
+
+impl DiagnosticLine {
+    pub(crate) fn new(at_ms: u128, stream: impl Into<String>, message: impl Into<String>) -> Self {
+        let stream = stream.into();
+        let message = message.into();
+        let (severity, code, location, message) = parse_diagnostic(&message);
+        Self {
+            at_ms,
+            stream,
+            severity,
+            code,
+            location,
+            message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DiagnosticSummary {
+    pub health: String,
+    pub warning_count: usize,
+    pub error_count: usize,
+    pub last_activity_at_ms: Option<u128>,
+    pub last_diagnostic: Option<DiagnosticLine>,
+}
+
+pub(crate) fn summarize_diagnostics(phase: &str, logs: &[DiagnosticLine]) -> DiagnosticSummary {
+    let warning_count = logs
+        .iter()
+        .filter(|line| line.severity == "warning")
+        .count();
+    let error_count = logs.iter().filter(|line| line.severity == "error").count();
+    let health = match phase {
+        "unavailable" => "unavailable",
+        "exited" => "error",
+        "stopped" => "stopped",
+        "running" if error_count > 0 => "degraded",
+        "running" if warning_count > 0 => "warning",
+        "running" => "healthy",
+        _ => "unknown",
+    };
+    DiagnosticSummary {
+        health: health.to_owned(),
+        warning_count,
+        error_count,
+        last_activity_at_ms: logs.last().map(|line| line.at_ms),
+        last_diagnostic: logs
+            .iter()
+            .rev()
+            .find(|line| line.severity != "info")
+            .cloned(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -45,6 +101,7 @@ pub struct IngestStatus {
     pub cli_path: String,
     pub data_dir: String,
     pub last_exit_code: Option<i32>,
+    pub diagnostics: DiagnosticSummary,
     pub logs: Vec<DiagnosticLine>,
 }
 
@@ -222,6 +279,11 @@ impl ManagedIngest {
         } else {
             process.phase
         };
+        let logs = self.logs.lock().map_or_else(
+            |_| Vec::new(),
+            |logs| logs.iter().cloned().collect::<Vec<_>>(),
+        );
+        let diagnostics = summarize_diagnostics(phase, &logs);
         IngestStatus {
             phase: phase.to_owned(),
             pid: process.child.as_ref().map(Child::id),
@@ -232,10 +294,8 @@ impl ManagedIngest {
             cli_path: self.config.cli_path.display().to_string(),
             data_dir: self.config.data_dir.display().to_string(),
             last_exit_code: process.last_exit_code,
-            logs: self
-                .logs
-                .lock()
-                .map_or_else(|_| Vec::new(), |logs| logs.iter().cloned().collect()),
+            diagnostics,
+            logs,
         }
     }
 
@@ -419,12 +479,42 @@ fn push_log(
         if logs.len() == MAX_LOG_LINES {
             logs.pop_front();
         }
-        logs.push_back(DiagnosticLine {
-            at_ms: now_ms(),
-            stream: stream.into(),
-            message,
-        });
+        logs.push_back(DiagnosticLine::new(now_ms(), stream, message));
     }
+}
+
+fn parse_diagnostic(message: &str) -> (String, Option<String>, Option<String>, String) {
+    let (severity, remainder) = if let Some(remainder) = message.strip_prefix("ERROR") {
+        ("error", remainder)
+    } else if let Some(remainder) = message.strip_prefix("WARNING") {
+        ("warning", remainder)
+    } else {
+        return ("info".to_owned(), None, None, message.to_owned());
+    };
+    let remainder = remainder.trim_start();
+    if let Some(message) = remainder.strip_prefix(':') {
+        return (
+            severity.to_owned(),
+            None,
+            None,
+            message.trim_start().to_owned(),
+        );
+    }
+    let Some((header, body)) = remainder.split_once(": ") else {
+        return (severity.to_owned(), None, None, remainder.to_owned());
+    };
+    let mut fields = header.split_whitespace();
+    let code = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let location = fields.collect::<Vec<_>>().join(" ");
+    (
+        severity.to_owned(),
+        code,
+        (!location.is_empty()).then_some(location),
+        body.trim_start().to_owned(),
+    )
 }
 
 fn random_token() -> Result<String, String> {
@@ -442,8 +532,8 @@ fn now_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{
-        IngestConfig, MAX_LOG_CHARS, MAX_LOG_LINES, ManagedIngest, push_log, random_token,
-        request_graceful_shutdown,
+        DiagnosticLine, IngestConfig, MAX_LOG_CHARS, MAX_LOG_LINES, ManagedIngest, push_log,
+        random_token, request_graceful_shutdown, summarize_diagnostics,
     };
     use std::{
         collections::HashSet,
@@ -487,6 +577,27 @@ mod tests {
             MAX_LOG_CHARS + 1
         );
         assert!(!logs.iter().any(|line| line.message == "line-0"));
+    }
+
+    #[test]
+    fn adapter_diagnostics_are_structured_and_affect_health() {
+        let logs = vec![
+            DiagnosticLine::new(1, "pi", "watching sessions"),
+            DiagnosticLine::new(
+                2,
+                "pi",
+                "WARNING line-json-invalid session.jsonl#3: cannot parse JSON",
+            ),
+            DiagnosticLine::new(3, "pi", "ERROR rpc-process-error: process stopped"),
+        ];
+        assert_eq!(logs[1].severity, "warning");
+        assert_eq!(logs[1].code.as_deref(), Some("line-json-invalid"));
+        assert_eq!(logs[1].location.as_deref(), Some("session.jsonl#3"));
+        let summary = summarize_diagnostics("running", &logs);
+        assert_eq!(summary.health, "degraded");
+        assert_eq!(summary.warning_count, 1);
+        assert_eq!(summary.error_count, 1);
+        assert_eq!(summary.last_diagnostic.as_ref().unwrap().at_ms, 3);
     }
 
     #[test]

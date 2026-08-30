@@ -25,7 +25,8 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - Rust 确定性 fold、SQLite 事实存储、checkpoint 快速恢复、增量快照和 delta；
 - 超过 1,000 条的 timeline 自动分页，首屏读取真实时间概览，历史回放与详情按需补齐；
 - WebSocket 实时通知，断开后自动降级为轮询；
-- Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和诊断抽屉；
+- Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和结构化诊断抽屉；
+- Adapter 健康度聚合、可定位的 severity/code/location 失败证据，以及四运行时共享的生命周期契约测试；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
 

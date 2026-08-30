@@ -4,6 +4,7 @@ export {
   AdapterConformanceError,
   MemoryCanonicalEventSink,
   assertCanonicalEventContract,
+  assertCanonicalLifecycleContract,
   defineAdapter,
   verifyAdapterConformance,
 } from "./sdk.ts";

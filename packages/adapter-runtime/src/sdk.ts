@@ -6,6 +6,9 @@ import {
 } from "../../protocol-ts/src/index.ts";
 import type { AcknowledgedCanonicalEventSink } from "./ndjson-sink.ts";
 
+const ACTIVITY_STATUSES = new Set(["running", "idle", "waiting", "ready", "inactive", "unknown"]);
+const TERMINAL_OUTCOMES = new Set(["succeeded", "failed", "interrupted", "cancelled", "unavailable"]);
+
 export interface PassiveRuntimeObserver {
   start(): Promise<unknown>;
   scanOnce(): Promise<unknown>;
@@ -14,7 +17,12 @@ export interface PassiveRuntimeObserver {
 
 export interface AdapterRuntimeContext {
   signal?: AbortSignal;
-  onDiagnostic?: (diagnostic: { level: "warning" | "error"; code?: string; message: string }) => void;
+  onDiagnostic?: (diagnostic: {
+    level: "warning" | "error";
+    code?: string;
+    location?: string;
+    message: string;
+  }) => void;
 }
 
 export interface AdapterPluginDefinition<Options> {
@@ -86,6 +94,60 @@ export function assertCanonicalEventContract(event: CanonicalEvent, runtime: Run
   if (!event.data || typeof event.data !== "object" || Array.isArray(event.data)) {
     throw new AdapterConformanceError(`event ${event.event_id} data must be an object`);
   }
+  assertCanonicalLifecycleContract(event);
+}
+
+/** Validate the runtime-independent semantics shared by every adapter. */
+export function assertCanonicalLifecycleContract(event: CanonicalEvent): void {
+  assertTimestamp(event, "observed_at", event.observed_at);
+  if (event.occurred_at !== undefined) assertTimestamp(event, "occurred_at", event.occurred_at);
+  if (event.source_ref !== undefined) {
+    assertNonEmpty(event, "source_ref.kind", event.source_ref.kind);
+    assertNonEmpty(event, "source_ref.location", event.source_ref.location);
+  }
+  if (event.supersedes_event_id !== undefined) {
+    assertNonEmpty(event, "supersedes_event_id", event.supersedes_event_id);
+    if (event.supersedes_event_id === event.event_id) {
+      throw new AdapterConformanceError(`event ${event.event_id} cannot supersede itself`);
+    }
+  }
+
+  switch (event.type) {
+    case "agent.spawned":
+      assertNonEmpty(event, "parent_session_id", event.parent_session_id);
+      break;
+    case "agent.activation_started":
+    case "agent.activation_ended":
+      assertDataString(event, "activation_id");
+      if (event.data.status !== undefined) assertStatus(event, event.data.status);
+      break;
+    case "agent.status_changed":
+      assertStatus(event, event.data.status);
+      break;
+    case "agent.outcome_recorded":
+      assertOutcome(event, event.data.outcome);
+      assertDataString(event, "evidence");
+      break;
+    case "tool.started":
+    case "tool.progressed":
+      assertDataString(event, "call_id");
+      assertDataString(event, "name");
+      break;
+    case "tool.finished":
+      assertDataString(event, "call_id");
+      assertDataString(event, "name");
+      assertOutcome(event, event.data.outcome);
+      break;
+    case "turn.ended":
+    case "step.ended":
+      if (event.data.outcome !== undefined) assertOutcome(event, event.data.outcome);
+      break;
+    case "error.recorded":
+      assertDataString(event, "message");
+      break;
+    default:
+      break;
+  }
 }
 
 export function verifyAdapterConformance<Options>(
@@ -101,13 +163,16 @@ export function verifyAdapterConformance<Options>(
     assertCanonicalEventContract(event, plugin.runtime);
     if (identities.has(event.event_id)) throw new AdapterConformanceError(`duplicate event_id ${event.event_id}`);
     identities.add(event.event_id);
-    const previous = sequences.get(event.source_id);
-    if (previous !== undefined && event.source_seq <= previous) {
+    // Persisted runtimes allocate sequence numbers per session and source kind;
+    // one raw record may legitimately expand into several canonical facts.
+    const sequenceKey = `${event.source_id}\u0000${event.session_id}\u0000${event.source_ref?.kind ?? "canonical"}`;
+    const previous = sequences.get(sequenceKey);
+    if (previous !== undefined && event.source_seq < previous) {
       throw new AdapterConformanceError(
-        `source_seq for ${event.source_id} must increase (${event.source_seq} <= ${previous})`,
+        `source_seq for ${event.source_id}/${event.session_id} must not decrease (${event.source_seq} < ${previous})`,
       );
     }
-    sequences.set(event.source_id, event.source_seq);
+    sequences.set(sequenceKey, event.source_seq);
     sessions.add(event.session_id);
     sources.add(event.source_id);
     eventTypes.add(event.type);
@@ -119,6 +184,34 @@ export function verifyAdapterConformance<Options>(
     sourceCount: sources.size,
     eventTypes: [...eventTypes].sort(),
   };
+}
+
+function assertTimestamp(event: CanonicalEvent, field: string, value: string): void {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new AdapterConformanceError(`event ${event.event_id} has invalid ${field}`);
+  }
+}
+
+function assertNonEmpty(event: CanonicalEvent, field: string, value: unknown): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new AdapterConformanceError(`event ${event.event_id} requires non-empty ${field}`);
+  }
+}
+
+function assertDataString(event: CanonicalEvent, field: string): void {
+  assertNonEmpty(event, `data.${field}`, event.data[field]);
+}
+
+function assertStatus(event: CanonicalEvent, value: unknown): void {
+  if (typeof value !== "string" || !ACTIVITY_STATUSES.has(value)) {
+    throw new AdapterConformanceError(`event ${event.event_id} has invalid activity status`);
+  }
+}
+
+function assertOutcome(event: CanonicalEvent, value: unknown): void {
+  if (typeof value !== "string" || !TERMINAL_OUTCOMES.has(value)) {
+    throw new AdapterConformanceError(`event ${event.event_id} has invalid terminal outcome`);
+  }
 }
 
 export class MemoryCanonicalEventSink implements AcknowledgedCanonicalEventSink {

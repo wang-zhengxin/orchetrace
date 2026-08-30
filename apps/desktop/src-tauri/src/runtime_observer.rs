@@ -11,7 +11,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::ingest::DiagnosticLine;
+use crate::ingest::{DiagnosticLine, DiagnosticSummary, summarize_diagnostics};
 
 const MAX_LOG_LINES: usize = 160;
 const MAX_LOG_CHARS: usize = 2_000;
@@ -35,6 +35,7 @@ pub struct RuntimeObserverStatus {
     pub pid: Option<u32>,
     pub sessions_dir: String,
     pub last_exit_code: Option<i32>,
+    pub diagnostics: DiagnosticSummary,
     pub logs: Vec<DiagnosticLine>,
 }
 
@@ -84,6 +85,7 @@ impl ManagedRuntimeObserver {
             return Ok(self.snapshot(&process));
         }
         self.ensure_runtime()?;
+        self.clear_logs();
         fs::create_dir_all(&self.config.state_dir)
             .map_err(|error| format!("{}: {error}", self.config.state_dir.display()))?;
         let mut child = Command::new(&self.config.node_path)
@@ -226,16 +228,25 @@ impl ManagedRuntimeObserver {
         } else {
             process.phase
         };
+        let logs = self.logs.lock().map_or_else(
+            |_| Vec::new(),
+            |logs| logs.iter().cloned().collect::<Vec<_>>(),
+        );
+        let diagnostics = summarize_diagnostics(phase, &logs);
         RuntimeObserverStatus {
             runtime: self.config.runtime.to_owned(),
             phase: phase.to_owned(),
             pid: process.child.as_ref().map(Child::id),
             sessions_dir: self.config.sessions_dir.display().to_string(),
             last_exit_code: process.last_exit_code,
-            logs: self
-                .logs
-                .lock()
-                .map_or_else(|_| Vec::new(), |logs| logs.iter().cloned().collect()),
+            diagnostics,
+            logs,
+        }
+    }
+
+    fn clear_logs(&self) {
+        if let Ok(mut logs) = self.logs.lock() {
+            logs.clear();
         }
     }
 }
@@ -290,11 +301,7 @@ fn push_log(
         if logs.len() == MAX_LOG_LINES {
             logs.pop_front();
         }
-        logs.push_back(DiagnosticLine {
-            at_ms: now_ms(),
-            stream,
-            message,
-        });
+        logs.push_back(DiagnosticLine::new(now_ms(), stream, message));
     }
 }
 

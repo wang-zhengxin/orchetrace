@@ -87,7 +87,10 @@ function eventMessage(
       return [
         ...(message ? [event(record, context, "message", "assistant.message", { summary: message })] : []),
         event(record, context, "turn", "turn.ended", { turn_id: turnId, outcome: "succeeded" }),
-        event(record, context, "outcome", "agent.outcome_recorded", { outcome: "succeeded" }),
+        event(record, context, "outcome", "agent.outcome_recorded", {
+          outcome: "succeeded",
+          evidence: message ?? "Codex reported task_complete",
+        }),
         event(record, context, "activation", "agent.activation_ended", {
           activation_id: turnId,
           status: "inactive",
@@ -186,13 +189,14 @@ function terminalEvents(
   evidence?: string,
 ): CanonicalEvent[] {
   const turnId = stringValue(record.payload.turn_id) ?? `turn-${record.line}`;
+  const terminalEvidence = evidence ?? `Codex turn ${outcome}`;
   return [
     event(record, context, "error", "error.recorded", {
       category: "runtime",
-      message: evidence ?? `Codex turn ${outcome}`,
+      message: terminalEvidence,
     }),
     event(record, context, "turn", "turn.ended", { turn_id: turnId, outcome }),
-    event(record, context, "outcome", "agent.outcome_recorded", { outcome, evidence }),
+    event(record, context, "outcome", "agent.outcome_recorded", { outcome, evidence: terminalEvidence }),
     event(record, context, "activation", "agent.activation_ended", {
       activation_id: turnId,
       status: "inactive",

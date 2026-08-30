@@ -4,6 +4,8 @@ import type { CanonicalEvent } from "../../protocol-ts/src/index.ts";
 
 export interface AdapterDiagnostic {
   level: "warning" | "error";
+  code?: string;
+  location?: string;
   message: string;
   cause?: unknown;
 }
@@ -118,7 +120,6 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
     socket.once("connect", () => {
       this.retryMs = this.reconnectMinMs;
       this.writable = socket.write(`${JSON.stringify({ kind: "hello", protocol: 1, token: this.options.token })}\n`);
-      this.options.onDiagnostic?.({ level: "warning", message: "transport connected" });
       this.flush();
     });
     socket.on("data", (chunk: string) => this.receive(chunk));
@@ -127,7 +128,13 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
       this.flush();
     });
     socket.once("error", (cause) => {
-      this.options.onDiagnostic?.({ level: "warning", message: "transport unavailable", cause });
+      this.options.onDiagnostic?.({
+        level: "warning",
+        code: "transport-unavailable",
+        location: `${this.host}:${this.port}`,
+        message: "transport unavailable",
+        cause,
+      });
     });
     socket.once("close", () => {
       if (this.socket === socket) this.socket = undefined;
@@ -158,15 +165,28 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
         } else if (frame.kind === "ack") {
           this.options.onDiagnostic?.({
             level: "error",
+            code: "unexpected-ack",
+            location: `${this.host}:${this.port}`,
             message: `unexpected ingest acknowledgement ${frame.event_id ?? "<missing>"}`,
           });
           this.socket?.destroy();
         } else if (frame.kind === "error") {
-          this.options.onDiagnostic?.({ level: "error", message: frame.message ?? "ingest rejected frame" });
+          this.options.onDiagnostic?.({
+            level: "error",
+            code: "ingest-rejected",
+            location: `${this.host}:${this.port}`,
+            message: frame.message ?? "ingest rejected frame",
+          });
           this.socket?.destroy();
         }
       } catch (cause: unknown) {
-        this.options.onDiagnostic?.({ level: "error", message: "invalid ingest response", cause });
+        this.options.onDiagnostic?.({
+          level: "error",
+          code: "invalid-ingest-response",
+          location: `${this.host}:${this.port}`,
+          message: "invalid ingest response",
+          cause,
+        });
       }
     }
   }
