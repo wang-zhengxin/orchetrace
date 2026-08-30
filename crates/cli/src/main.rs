@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::{BufRead, BufReader, BufWriter, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
@@ -15,7 +15,9 @@ use chrono::{SecondsFormat, TimeDelta, Utc};
 use orchetrace_core::fold_events;
 use orchetrace_ingest::{IngestStore, RunCatalog, RunSnapshotDelta, RunState};
 use orchetrace_protocol::{CanonicalEvent, CaptureMode, PrivacyPolicy, RuntimeKind};
-use orchetrace_storage::{EventStore, InsertOutcome, RetentionPolicy};
+use orchetrace_storage::{
+    CheckpointStatus, EventStore, InsertOutcome, RetentionPolicy, StorageDiagnostics,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -41,6 +43,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("scrub") => scrub_command(args.collect()),
         Some("delete-session") => delete_session_command(args.collect()),
         Some("prune") => prune_command(args.collect()),
+        Some("doctor") => doctor_command(args.collect()),
+        Some("repair") => repair_command(args.collect()),
+        Some("export") => export_command(args.collect()),
+        Some("diagnostics") => diagnostics_command(args.collect()),
         Some(command) => {
             print_usage();
             Err(format!("unknown command `{command}`").into())
@@ -50,6 +56,144 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     }
+}
+
+fn doctor_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut json_output = false;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--json" => json_output = true,
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let storage = open_existing_store(&database_path)?;
+    let diagnostics = storage.diagnose()?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&diagnostics)?);
+    } else {
+        println!(
+            "database {}: {} events, schema v{}, checkpoint {:?}",
+            if diagnostics.has_errors() {
+                "ERROR"
+            } else {
+                "OK"
+            },
+            diagnostics.event_count,
+            diagnostics.schema_version,
+            diagnostics.checkpoint_status
+        );
+        for issue in &diagnostics.issues {
+            println!(
+                "{:?} {} {}: {}",
+                issue.severity, issue.code, issue.location, issue.message
+            );
+        }
+        if diagnostics.truncated_issue_count > 0 {
+            println!(
+                "{} additional diagnostic issue(s) omitted",
+                diagnostics.truncated_issue_count
+            );
+        }
+    }
+    if diagnostics.has_errors() {
+        return Err("database contains canonical fact or SQLite integrity errors".into());
+    }
+    Ok(())
+}
+
+fn repair_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut data_dir = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--data-dir" => {
+                data_dir = Some(PathBuf::from(args.next().ok_or("missing --data-dir path")?))
+            }
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let mut storage = open_existing_store(&database_path)?;
+    let outcome = storage.repair_derived_state()?;
+    if let Some(data_dir) = data_dir {
+        refresh_projection(&mut storage, &data_dir)?;
+    }
+    println!(
+        "rebuilt checkpoint for {} runs / {} canonical events; facts were not modified",
+        outcome.run_count, outcome.event_count
+    );
+    Ok(())
+}
+
+fn export_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut output = None;
+    let mut run_id = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--output" | "-o" => {
+                output = Some(PathBuf::from(args.next().ok_or("missing --output path")?))
+            }
+            "--run-id" => run_id = Some(args.next().ok_or("missing --run-id value")?),
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let output = output.ok_or("export requires --output")?;
+    if output == database_path {
+        return Err("export output must not overwrite the SQLite database".into());
+    }
+    let storage = open_existing_store(&database_path)?;
+    let events = storage.load_events()?;
+    let exported = match run_id.as_deref() {
+        Some(run_id) => events_for_run(events, run_id)?,
+        None => events,
+    };
+    rewrite_events(&output, &exported)?;
+    restrict_file_permissions(&output)?;
+    println!(
+        "exported {} canonical events to {}{}",
+        exported.len(),
+        output.display(),
+        run_id
+            .as_deref()
+            .map_or_else(String::new, |run_id| format!(" for run {run_id}"))
+    );
+    Ok(())
+}
+
+fn diagnostics_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut database_path = PathBuf::from(".orchetrace/orchetrace.db");
+    let mut output = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--db" => database_path = PathBuf::from(args.next().ok_or("missing --db path")?),
+            "--output" | "-o" => {
+                output = Some(PathBuf::from(args.next().ok_or("missing --output path")?))
+            }
+            _ => return Err(format!("unknown argument `{arg}`").into()),
+        }
+    }
+    let output = output.ok_or("diagnostics requires --output")?;
+    if output == database_path {
+        return Err("diagnostics output must not overwrite the SQLite database".into());
+    }
+    let storage = open_existing_store(&database_path)?;
+    let storage_diagnostics = storage.diagnose()?;
+    let bundle = build_diagnostic_bundle(&database_path, &storage, storage_diagnostics);
+    write_json_atomic(&output, &bundle)?;
+    restrict_file_permissions(&output)?;
+    println!(
+        "wrote content-free diagnostic bundle to {}",
+        output.display()
+    );
+    Ok(())
 }
 
 fn scrub_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -649,6 +793,169 @@ struct ServerState {
     privacy_policy: PrivacyPolicy,
 }
 
+#[derive(Serialize)]
+struct DiagnosticBundle {
+    schema_version: u16,
+    generated_at: String,
+    application: DiagnosticApplication,
+    database: DiagnosticDatabase,
+    storage: BundleStorageDiagnostics,
+    projection_available: bool,
+    runtime_counts: BTreeMap<String, usize>,
+    runs: Vec<Value>,
+}
+
+#[derive(Serialize)]
+struct DiagnosticApplication {
+    version: &'static str,
+    operating_system: &'static str,
+    architecture: &'static str,
+}
+
+#[derive(Serialize)]
+struct DiagnosticDatabase {
+    database_bytes: u64,
+    wal_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct BundleStorageDiagnostics {
+    schema_version: i64,
+    event_count: usize,
+    integrity_ok: bool,
+    foreign_key_violations: usize,
+    invalid_event_payloads: usize,
+    indexed_field_mismatches: usize,
+    checkpoint_status: CheckpointStatus,
+    checkpoint_event_count: Option<usize>,
+    checkpoint_run_count: usize,
+    issue_codes: BTreeMap<String, usize>,
+    truncated_issue_count: usize,
+}
+
+fn build_diagnostic_bundle(
+    database_path: &Path,
+    storage: &EventStore,
+    storage_diagnostics: StorageDiagnostics,
+) -> DiagnosticBundle {
+    let storage_has_errors = storage_diagnostics.has_errors();
+    let mut projection_available = false;
+    let mut runtime_counts = BTreeMap::new();
+    let mut runs = Vec::new();
+    if !storage_has_errors
+        && let Ok(events) = storage.load_events()
+        && let Ok(ingest) = IngestStore::from_events(events)
+    {
+        projection_available = true;
+        for (index, run) in ingest.catalog().runs.into_iter().enumerate() {
+            *runtime_counts
+                .entry(run.runtime.as_str().to_owned())
+                .or_insert(0) += 1;
+            runs.push(json!({
+                "index": index,
+                "runtime": run.runtime,
+                "status": run.status,
+                "outcome": run.outcome,
+                "agent_count": run.agent_count,
+                "edge_count": run.edge_count,
+                "event_count": run.event_count,
+                "started_at": run.started_at,
+                "last_activity_at": run.last_activity_at,
+            }));
+        }
+    }
+    DiagnosticBundle {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        application: DiagnosticApplication {
+            version: env!("CARGO_PKG_VERSION"),
+            operating_system: env::consts::OS,
+            architecture: env::consts::ARCH,
+        },
+        database: DiagnosticDatabase {
+            database_bytes: file_size(database_path),
+            wal_bytes: file_size(&sqlite_sidecar_path(database_path, "-wal")),
+        },
+        storage: content_free_storage_diagnostics(storage_diagnostics),
+        projection_available,
+        runtime_counts,
+        runs,
+    }
+}
+
+fn content_free_storage_diagnostics(diagnostics: StorageDiagnostics) -> BundleStorageDiagnostics {
+    let mut issue_codes = BTreeMap::new();
+    for issue in diagnostics.issues {
+        *issue_codes.entry(issue.code).or_insert(0) += 1;
+    }
+    BundleStorageDiagnostics {
+        schema_version: diagnostics.schema_version,
+        event_count: diagnostics.event_count,
+        integrity_ok: diagnostics.integrity_ok,
+        foreign_key_violations: diagnostics.foreign_key_violations,
+        invalid_event_payloads: diagnostics.invalid_event_payloads,
+        indexed_field_mismatches: diagnostics.indexed_field_mismatches,
+        checkpoint_status: diagnostics.checkpoint_status,
+        checkpoint_event_count: diagnostics.checkpoint_event_count,
+        checkpoint_run_count: diagnostics.checkpoint_run_count,
+        issue_codes,
+        truncated_issue_count: diagnostics.truncated_issue_count,
+    }
+}
+
+fn events_for_run(
+    events: Vec<CanonicalEvent>,
+    run_id: &str,
+) -> Result<Vec<CanonicalEvent>, Box<dyn std::error::Error>> {
+    let ingest = IngestStore::from_events(events.clone())?;
+    let run = ingest
+        .runs()
+        .into_iter()
+        .find(|run| run.run_id == run_id)
+        .ok_or_else(|| format!("run `{run_id}` was not found"))?;
+    let session_ids = run
+        .snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect::<BTreeSet<_>>();
+    Ok(events
+        .into_iter()
+        .filter(|event| {
+            event.runtime == run.runtime
+                && event.source_id == run.source_id
+                && session_ids.contains(event.session_id.as_str())
+        })
+        .collect())
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_owned();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn file_size(path: &Path) -> u64 {
+    fs::metadata(path).map_or(0, |metadata| metadata.len())
+}
+
+fn open_existing_store(path: &Path) -> Result<EventStore, Box<dyn std::error::Error>> {
+    if !path.is_file() {
+        return Err(format!("database does not exist: {}", path.display()).into());
+    }
+    Ok(EventStore::open(path)?)
+}
+
+fn restrict_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 fn privacy_policy(
     capture_mode: CaptureMode,
     sensitive_keys: impl IntoIterator<Item = String>,
@@ -983,16 +1290,22 @@ fn is_loopback(ip: IpAddr) -> bool {
 
 fn print_usage() {
     println!(
-        "Orchetrace CLI\n\nUsage:\n  otrace fold <events.jsonl> [--output snapshot.json] [--data-dir dir]\n  otrace serve [--listen 127.0.0.1:43117] --token <token> [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key] [--retention-days days] [--max-events count] [--live-listen 127.0.0.1:43118] [--web-origin origin] [--no-live] [--snapshot legacy.json] [--events mirror.jsonl]\n  otrace scrub [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key]\n  otrace delete-session [--db path] [--data-dir dir] --runtime runtime --source-id id --session-id id\n  otrace prune [--db path] [--data-dir dir] [--before RFC3339 | --older-than-days days] [--max-events count]"
+        "Orchetrace CLI\n\nUsage:\n  otrace fold <events.jsonl> [--output snapshot.json] [--data-dir dir]\n  otrace serve [--listen 127.0.0.1:43117] --token <token> [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key] [--retention-days days] [--max-events count] [--live-listen 127.0.0.1:43118] [--web-origin origin] [--no-live] [--snapshot legacy.json] [--events mirror.jsonl]\n  otrace scrub [--db path] [--data-dir dir] [--privacy-mode standard|metadata-only] [--redact-key key]\n  otrace delete-session [--db path] [--data-dir dir] --runtime runtime --source-id id --session-id id\n  otrace prune [--db path] [--data-dir dir] [--before RFC3339 | --older-than-days days] [--max-events count]\n  otrace doctor [--db path] [--json]\n  otrace repair [--db path] [--data-dir dir]\n  otrace export [--db path] --output events.jsonl [--run-id id]\n  otrace diagnostics [--db path] --output diagnostics.json"
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_file_component, is_shutdown_frame, persist_run_data};
+    use super::{
+        build_diagnostic_bundle, diagnostics_command, doctor_command, encode_file_component,
+        events_for_run, export_command, is_shutdown_frame, persist_run_data, repair_command,
+    };
     use orchetrace_ingest::{RunCatalog, RunState};
+    use orchetrace_protocol::{CanonicalEvent, EventType, RuntimeKind};
+    use orchetrace_storage::EventStore;
     use serde_json::json;
     use std::{
+        collections::BTreeMap,
         fs, process,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1081,5 +1394,139 @@ mod tests {
         assert_eq!(first.as_array().unwrap().len(), 1_000);
         assert_eq!(second.as_array().unwrap().len(), 5);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn run_export_contains_only_the_selected_topology() {
+        let events = vec![
+            diagnostic_event("root-a", "root-a", None, 1, "visible"),
+            diagnostic_event("child-a", "child-a", Some("root-a"), 2, "child"),
+            diagnostic_event("root-b", "root-b", None, 3, "other"),
+        ];
+        let ingest = orchetrace_ingest::IngestStore::from_events(events.clone()).unwrap();
+        let selected_id = ingest
+            .runs()
+            .into_iter()
+            .find(|run| run.snapshot.root_session_id == "root-a")
+            .unwrap()
+            .run_id;
+        let selected = events_for_run(events, &selected_id).unwrap();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root-a", "child-a"]
+        );
+    }
+
+    #[test]
+    fn diagnostic_bundle_excludes_event_content_and_identifiers() {
+        let directory = temporary_directory("diagnostic-bundle");
+        let database = directory.join("events.db");
+        let mut store = EventStore::open(&database).unwrap();
+        store
+            .insert_event(&diagnostic_event(
+                "private-event-id",
+                "private-session-id",
+                None,
+                1,
+                "TOP SECRET PROMPT",
+            ))
+            .unwrap();
+        let diagnostics = store.diagnose().unwrap();
+        let bundle = build_diagnostic_bundle(&database, &store, diagnostics);
+        let serialized = serde_json::to_string(&bundle).unwrap();
+        assert!(!serialized.contains("TOP SECRET PROMPT"));
+        assert!(!serialized.contains("private-event-id"));
+        assert!(!serialized.contains("private-session-id"));
+        assert!(serialized.contains("deepseek-harness"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn maintenance_commands_complete_a_safe_operational_round_trip() {
+        let directory = temporary_directory("maintenance-round-trip");
+        let database = directory.join("events.db");
+        let data_dir = directory.join("projection");
+        let export = directory.join("events.jsonl");
+        let diagnostics = directory.join("diagnostics.json");
+        let mut store = EventStore::open(&database).unwrap();
+        store
+            .insert_event(&diagnostic_event("event-1", "root", None, 1, "private"))
+            .unwrap();
+        drop(store);
+
+        doctor_command(vec![
+            "--db".into(),
+            database.display().to_string(),
+            "--json".into(),
+        ])
+        .unwrap();
+        repair_command(vec![
+            "--db".into(),
+            database.display().to_string(),
+            "--data-dir".into(),
+            data_dir.display().to_string(),
+        ])
+        .unwrap();
+        export_command(vec![
+            "--db".into(),
+            database.display().to_string(),
+            "--output".into(),
+            export.display().to_string(),
+        ])
+        .unwrap();
+        diagnostics_command(vec![
+            "--db".into(),
+            database.display().to_string(),
+            "--output".into(),
+            diagnostics.display().to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&export).unwrap().lines().count(), 1);
+        assert!(data_dir.join("run-catalog.json").is_file());
+        let bundle = fs::read_to_string(&diagnostics).unwrap();
+        assert!(bundle.contains("\"projection_available\": true"));
+        assert!(!bundle.contains("private"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn diagnostic_event(
+        event_id: &str,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        source_seq: u64,
+        label: &str,
+    ) -> CanonicalEvent {
+        CanonicalEvent {
+            schema_version: 1,
+            event_id: event_id.to_owned(),
+            runtime: RuntimeKind::DeepSeekHarness,
+            source_id: "private-source-id".to_owned(),
+            session_id: session_id.to_owned(),
+            parent_session_id: parent_session_id.map(str::to_owned),
+            source_seq,
+            observed_at: format!("2026-08-30T00:00:{source_seq:02}Z"),
+            occurred_at: None,
+            event_type: EventType::SessionDiscovered,
+            data: json!({ "label": label }),
+            attributes: BTreeMap::new(),
+            source_ref: None,
+            supersedes_event_id: None,
+            ignorable: false,
+        }
+    }
+
+    fn temporary_directory(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("orchetrace-{label}-{}-{nonce}", process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        directory
     }
 }

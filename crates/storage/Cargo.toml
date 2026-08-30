@@ -9,4 +9,5 @@ rust-version.workspace = true
 orchetrace-protocol.workspace = true
 orchetrace-ingest.workspace = true
 rusqlite.workspace = true
+serde.workspace = true
 serde_json.workspace = true

@@ -2452,6 +2452,7 @@ dependencies = [
  "orchetrace-ingest",
  "orchetrace-protocol",
  "rusqlite",
+ "serde",
  "serde_json",
 ]
 

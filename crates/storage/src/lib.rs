@@ -4,12 +4,14 @@ use std::{
     path::Path,
 };
 
-use orchetrace_ingest::{CachedEvent, RunCatalog, RunState};
+use orchetrace_ingest::{CachedEvent, IngestError, IngestStore, RunCatalog, RunState};
 use orchetrace_protocol::{CanonicalEvent, PrivacyPolicy, RuntimeKind, ValidationError};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use serde::Serialize;
 
 const SCHEMA_VERSION: i64 = 3;
 const PRIVACY_POLICY_KEY: &str = "privacy-policy-fingerprint";
+const MAX_DIAGNOSTIC_ISSUES: usize = 100;
 
 pub struct EventStore {
     connection: Connection,
@@ -68,6 +70,70 @@ pub struct ScrubOutcome {
     pub omitted_fields: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagnosticSeverity {
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckpointStatus {
+    NotRequired,
+    Healthy,
+    Missing,
+    Stale,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StorageDiagnosticIssue {
+    pub severity: DiagnosticSeverity,
+    pub code: String,
+    pub location: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StorageDiagnostics {
+    pub schema_version: i64,
+    pub event_count: usize,
+    pub integrity_ok: bool,
+    pub foreign_key_violations: usize,
+    pub invalid_event_payloads: usize,
+    pub indexed_field_mismatches: usize,
+    pub checkpoint_status: CheckpointStatus,
+    pub checkpoint_event_count: Option<usize>,
+    pub checkpoint_run_count: usize,
+    pub issues: Vec<StorageDiagnosticIssue>,
+    pub truncated_issue_count: usize,
+}
+
+impl StorageDiagnostics {
+    pub fn has_errors(&self) -> bool {
+        !self.integrity_ok
+            || self.foreign_key_violations > 0
+            || self.invalid_event_payloads > 0
+            || self.indexed_field_mismatches > 0
+            || self
+                .issues
+                .iter()
+                .any(|issue| issue.severity == DiagnosticSeverity::Error)
+    }
+
+    pub fn is_repairable(&self) -> bool {
+        !self.has_errors()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Default, PartialEq, Eq)]
+pub struct RepairOutcome {
+    pub event_count: usize,
+    pub run_count: usize,
+    pub checkpoint_rebuilt: bool,
+}
+
 #[derive(Debug)]
 pub enum StorageError {
     Sql(rusqlite::Error),
@@ -83,6 +149,8 @@ pub enum StorageError {
     },
     ConflictingDuplicate(String),
     UnsupportedSchema(i64),
+    Projection(IngestError),
+    Unrepairable(String),
 }
 
 impl std::fmt::Display for StorageError {
@@ -107,6 +175,10 @@ impl std::fmt::Display for StorageError {
             Self::UnsupportedSchema(version) => {
                 write!(formatter, "unsupported storage schema version {version}")
             }
+            Self::Projection(source) => write!(formatter, "projection rebuild failed: {source}"),
+            Self::Unrepairable(message) => {
+                write!(formatter, "storage is not safely repairable: {message}")
+            }
         }
     }
 }
@@ -128,6 +200,12 @@ impl From<serde_json::Error> for StorageError {
 impl From<std::io::Error> for StorageError {
     fn from(source: std::io::Error) -> Self {
         Self::Io(source)
+    }
+}
+
+impl From<IngestError> for StorageError {
+    fn from(source: IngestError) -> Self {
+        Self::Projection(source)
     }
 }
 
@@ -270,6 +348,98 @@ impl EventStore {
                     row.get(0)
                 })?;
         Ok(usize::try_from(count).expect("SQLite COUNT(*) cannot be negative"))
+    }
+
+    /// Inspect durable facts and derived checkpoints without changing either.
+    pub fn diagnose(&self) -> Result<StorageDiagnostics, StorageError> {
+        let schema_version = self
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let event_count = self.event_count()?;
+        let mut diagnostics = StorageDiagnostics {
+            schema_version,
+            event_count,
+            integrity_ok: true,
+            foreign_key_violations: 0,
+            invalid_event_payloads: 0,
+            indexed_field_mismatches: 0,
+            checkpoint_status: CheckpointStatus::NotRequired,
+            checkpoint_event_count: None,
+            checkpoint_run_count: 0,
+            issues: Vec::new(),
+            truncated_issue_count: 0,
+        };
+
+        let mut integrity_statement = self.connection.prepare("PRAGMA integrity_check")?;
+        let integrity_rows = integrity_statement.query_map([], |row| row.get::<_, String>(0))?;
+        for result in integrity_rows {
+            let message = result?;
+            if message != "ok" {
+                diagnostics.integrity_ok = false;
+                push_diagnostic_issue(
+                    &mut diagnostics,
+                    DiagnosticSeverity::Error,
+                    "sqlite-integrity",
+                    "database",
+                    message,
+                );
+            }
+        }
+
+        let mut foreign_key_statement = self.connection.prepare("PRAGMA foreign_key_check")?;
+        let violations = foreign_key_statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        for violation in violations {
+            let (table, row_id, parent, foreign_key) = violation?;
+            diagnostics.foreign_key_violations += 1;
+            push_diagnostic_issue(
+                &mut diagnostics,
+                DiagnosticSeverity::Error,
+                "foreign-key-violation",
+                table,
+                format!(
+                    "row {} does not satisfy {} foreign key {foreign_key}",
+                    row_id.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
+                    parent
+                ),
+            );
+        }
+
+        self.diagnose_event_payloads(&mut diagnostics)?;
+        self.diagnose_checkpoint(&mut diagnostics)?;
+        Ok(diagnostics)
+    }
+
+    /// Rebuild disposable projections only. Canonical events are never rewritten.
+    pub fn repair_derived_state(&mut self) -> Result<RepairOutcome, StorageError> {
+        let diagnostics = self.diagnose()?;
+        if !diagnostics.is_repairable() {
+            return Err(StorageError::Unrepairable(format!(
+                "{} invalid payloads, {} index mismatches, {} foreign-key violations",
+                diagnostics.invalid_event_payloads,
+                diagnostics.indexed_field_mismatches,
+                diagnostics.foreign_key_violations
+            )));
+        }
+        let events = self.load_events()?;
+        let event_count = events.len();
+        let ingest = IngestStore::from_events(events)?;
+        let runs = ingest.runs();
+        let catalog = ingest.catalog();
+        self.save_checkpoint(&runs, &catalog, event_count)?;
+        self.connection
+            .execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(PASSIVE);")?;
+        Ok(RepairOutcome {
+            event_count,
+            run_count: runs.len(),
+            checkpoint_rebuilt: true,
+        })
     }
 
     pub fn scrub(&mut self, policy: &PrivacyPolicy) -> Result<ScrubOutcome, StorageError> {
@@ -530,9 +700,176 @@ impl EventStore {
         }))
     }
 
+    fn diagnose_event_payloads(
+        &self,
+        diagnostics: &mut StorageDiagnostics,
+    ) -> Result<(), StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, runtime, source_id, session_id, parent_session_id,
+                    source_seq, observed_at, occurred_at, event_type, payload_json
+             FROM canonical_events ORDER BY event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+            ))
+        })?;
+        for row in rows {
+            let (
+                event_id,
+                runtime,
+                source_id,
+                session_id,
+                parent_session_id,
+                source_seq,
+                observed_at,
+                occurred_at,
+                event_type,
+                payload,
+            ) = row?;
+            let event = match serde_json::from_str::<CanonicalEvent>(&payload) {
+                Ok(event) => event,
+                Err(error) => {
+                    diagnostics.invalid_event_payloads += 1;
+                    push_diagnostic_issue(
+                        diagnostics,
+                        DiagnosticSeverity::Error,
+                        "invalid-event-json",
+                        event_id,
+                        error.to_string(),
+                    );
+                    continue;
+                }
+            };
+            if let Err(error) = event.validate() {
+                diagnostics.invalid_event_payloads += 1;
+                push_diagnostic_issue(
+                    diagnostics,
+                    DiagnosticSeverity::Error,
+                    "invalid-canonical-event",
+                    event_id.clone(),
+                    error.to_string(),
+                );
+                continue;
+            }
+            let payload_type = serde_json::to_string(&event.event_type)?;
+            let payload_type = payload_type.trim_matches('"');
+            let indexed_fields_match = event.event_id == event_id
+                && event.runtime.as_str() == runtime
+                && event.source_id == source_id
+                && event.session_id == session_id
+                && event.parent_session_id == parent_session_id
+                && i64::try_from(event.source_seq).ok() == Some(source_seq)
+                && event.observed_at == observed_at
+                && event.occurred_at == occurred_at
+                && payload_type == event_type;
+            if !indexed_fields_match {
+                diagnostics.indexed_field_mismatches += 1;
+                push_diagnostic_issue(
+                    diagnostics,
+                    DiagnosticSeverity::Error,
+                    "event-index-mismatch",
+                    event_id,
+                    "indexed columns disagree with the canonical payload",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn diagnose_checkpoint(
+        &self,
+        diagnostics: &mut StorageDiagnostics,
+    ) -> Result<(), StorageError> {
+        let catalog_event_count: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT checkpoint_event_count FROM run_catalog_checkpoint WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let snapshot_count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM run_snapshots", [], |row| row.get(0))?;
+        diagnostics.checkpoint_event_count =
+            catalog_event_count.and_then(|count| usize::try_from(count).ok());
+        diagnostics.checkpoint_run_count =
+            usize::try_from(snapshot_count).expect("SQLite COUNT(*) cannot be negative");
+        if catalog_event_count.is_none() && snapshot_count == 0 {
+            diagnostics.checkpoint_status = if diagnostics.event_count == 0 {
+                CheckpointStatus::NotRequired
+            } else {
+                push_diagnostic_issue(
+                    diagnostics,
+                    DiagnosticSeverity::Warning,
+                    "checkpoint-missing",
+                    "derived-state",
+                    "canonical events are valid but no projection checkpoint exists",
+                );
+                CheckpointStatus::Missing
+            };
+            return Ok(());
+        }
+        match self.load_checkpoint()? {
+            Some(checkpoint) if checkpoint.event_count == diagnostics.event_count => {
+                diagnostics.checkpoint_status = CheckpointStatus::Healthy;
+            }
+            Some(_) => {
+                diagnostics.checkpoint_status = CheckpointStatus::Stale;
+                push_diagnostic_issue(
+                    diagnostics,
+                    DiagnosticSeverity::Warning,
+                    "checkpoint-stale",
+                    "derived-state",
+                    "projection checkpoint does not cover the current event count",
+                );
+            }
+            None => {
+                diagnostics.checkpoint_status = CheckpointStatus::Corrupt;
+                push_diagnostic_issue(
+                    diagnostics,
+                    DiagnosticSeverity::Warning,
+                    "checkpoint-corrupt",
+                    "derived-state",
+                    "projection checkpoint cannot be decoded or has inconsistent run identities",
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn open_in_memory() -> Result<Self, StorageError> {
         Self::from_connection(Connection::open_in_memory()?)
+    }
+}
+
+fn push_diagnostic_issue(
+    diagnostics: &mut StorageDiagnostics,
+    severity: DiagnosticSeverity,
+    code: impl Into<String>,
+    location: impl Into<String>,
+    message: impl Into<String>,
+) {
+    if diagnostics.issues.len() < MAX_DIAGNOSTIC_ISSUES {
+        diagnostics.issues.push(StorageDiagnosticIssue {
+            severity,
+            code: code.into(),
+            location: location.into(),
+            message: message.into(),
+        });
+    } else {
+        diagnostics.truncated_issue_count += 1;
     }
 }
 
@@ -993,5 +1330,47 @@ mod tests {
                 .iter()
                 .all(|event| event.session_id == "new")
         );
+    }
+
+    #[test]
+    fn diagnostics_distinguish_canonical_facts_from_repairable_checkpoints() {
+        let event = event("doctor-1", 1, "doctor");
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_event(&event).unwrap();
+
+        let missing = store.diagnose().unwrap();
+        assert!(missing.integrity_ok);
+        assert!(missing.is_repairable());
+        assert_eq!(missing.checkpoint_status, CheckpointStatus::Missing);
+
+        let outcome = store.repair_derived_state().unwrap();
+        assert_eq!(outcome.event_count, 1);
+        assert_eq!(outcome.run_count, 1);
+        let healthy = store.diagnose().unwrap();
+        assert_eq!(healthy.checkpoint_status, CheckpointStatus::Healthy);
+        assert!(!healthy.has_errors());
+    }
+
+    #[test]
+    fn repair_refuses_to_rewrite_inconsistent_canonical_facts() {
+        let event = event("mismatch-1", 1, "mismatch");
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_event(&event).unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE canonical_events SET source_id = 'different' WHERE event_id = 'mismatch-1'",
+                [],
+            )
+            .unwrap();
+
+        let diagnostics = store.diagnose().unwrap();
+        assert_eq!(diagnostics.indexed_field_mismatches, 1);
+        assert!(diagnostics.has_errors());
+        assert!(matches!(
+            store.repair_derived_state(),
+            Err(StorageError::Unrepairable(_))
+        ));
+        assert_eq!(store.event_count().unwrap(), 1);
     }
 }

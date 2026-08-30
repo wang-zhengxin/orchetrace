@@ -27,6 +27,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - WebSocket 实时通知，断开后自动降级为轮询；
 - Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和结构化诊断抽屉；
 - Adapter 健康度聚合、可定位的 severity/code/location 失败证据，以及四运行时共享的生命周期契约测试；
+- SQLite 事实体检、派生投影安全修复、按 Run 导出和不含会话正文的诊断包；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
 
@@ -378,6 +379,36 @@ otrace prune \
 ```
 
 `serve --retention-days/--max-events` 会在启动时执行相同清理。当前 Alpha 尚未实现独立加密 content blob；在该能力完成前，仍不要将未审查的 transcript 或数据库提交到代码仓库。
+
+## 诊断、修复与导出
+
+对数据库做维护操作前应先停止 Ingest。`doctor` 检查 SQLite integrity、外键、Canonical Event JSON、索引列与 payload 一致性、checkpoint 状态：
+
+```bash
+otrace doctor --db /path/to/orchetrace.db
+otrace doctor --db /path/to/orchetrace.db --json
+```
+
+`repair` 只重建可丢弃的 checkpoint 和 Web/TUI 投影，不改写 Canonical Event。如果事实 JSON、索引列或 SQLite integrity 异常，命令会拒绝修复：
+
+```bash
+otrace repair \
+  --db /path/to/orchetrace.db \
+  --data-dir /path/to/data
+```
+
+导出命令输出已按当前隐私策略存储的 Canonical JSONL，可导出全库或单个 Run。文件可能包含 prompt 和工具证据，Unix 上默认设为 `0600`：
+
+```bash
+otrace export --db /path/to/orchetrace.db --output events.jsonl
+otrace export --db /path/to/orchetrace.db --run-id '<catalog run_id>' --output run.jsonl
+```
+
+用于提交 Issue 的诊断包不包含 prompt、message、tool payload、token、Session ID 或本地路径，只保留版本、存储健康、Runtime 计数和匿名 Run 统计：
+
+```bash
+otrace diagnostics --db /path/to/orchetrace.db --output diagnostics.json
+```
 
 ## 当前限制
 
