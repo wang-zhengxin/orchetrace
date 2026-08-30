@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/otrace",
+      "binaries/orchetrace-node"
+    ],
+    "resources": {
+      "../../../packages/adapter-runtime/src": "packages/adapter-runtime/src",
+      "../../../packages/protocol-ts/src": "packages/protocol-ts/src",
+      "../../../packages/claude-adapter/src": "packages/claude-adapter/src",
+      "../../../packages/pi-adapter/src": "packages/pi-adapter/src",
+      "../../../packages/dsh-observer/src": "packages/dsh-observer/src",
+      "../../../packages/codex-adapter/src": "packages/codex-adapter/src",
+      "resources": "resources"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Local-first multi-agent observability",
+    "longDescription": "Observe, replay, and diagnose Claude Code, Pi, DeepSeek Harness, and Codex agent sessions from one local-first desktop application."
+  }
+}

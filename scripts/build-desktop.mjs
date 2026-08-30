@@ -8,7 +8,16 @@ const output = path.join(root, "apps", "desktop", "dist");
 
 await rm(output, { recursive: true, force: true });
 await mkdir(path.join(output, "data"), { recursive: true });
-for (const asset of ["index.html", "app.js", "desktop-bridge.js", "run-delta.js", "runtime-registry.js", "generated-runtime-registry.js", "styles.css"]) {
+for (const asset of [
+  "index.html",
+  "app.js",
+  "desktop-bridge.js",
+  "run-delta.js",
+  "runtime-diagnostics.js",
+  "runtime-registry.js",
+  "generated-runtime-registry.js",
+  "styles.css",
+]) {
   await cp(path.join(web, asset), path.join(output, asset), { force: true });
 }
 await cp(path.join(web, "public", "run-snapshot.json"), path.join(output, "run-snapshot.json"));

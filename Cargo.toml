@@ -27,3 +27,4 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crossterm = "0.28"
 ratatui = "0.29"
+zstd = "0.13"

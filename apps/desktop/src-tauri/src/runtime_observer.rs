@@ -20,6 +20,7 @@ const MAX_LOG_CHARS: usize = 2_000;
 pub struct RuntimeObserverConfig {
     pub runtime: &'static str,
     pub node_path: PathBuf,
+    pub helper_path: PathBuf,
     pub auto_script: PathBuf,
     pub directory_flag: &'static str,
     pub sessions_dir: PathBuf,
@@ -99,6 +100,7 @@ impl ManagedRuntimeObserver {
             .arg("--port")
             .arg(self.config.ingest_port.to_string())
             .env("ORCHETRACE_TOKEN", token)
+            .env("ORCHETRACE_ZSTD_PATH", &self.config.helper_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -321,6 +323,7 @@ mod tests {
         let managed = ManagedRuntimeObserver::new(RuntimeObserverConfig {
             runtime: "pi",
             node_path: PathBuf::from("/definitely/missing/node"),
+            helper_path: PathBuf::from("/definitely/missing/otrace"),
             auto_script: PathBuf::from("/definitely/missing/auto.ts"),
             directory_flag: "--sessions-dir",
             sessions_dir: PathBuf::from("sessions"),

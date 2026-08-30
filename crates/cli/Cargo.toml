@@ -29,3 +29,4 @@ tungstenite.workspace = true
 chrono.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
+zstd.workspace = true

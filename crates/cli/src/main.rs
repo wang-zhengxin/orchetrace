@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
@@ -47,6 +47,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("repair") => repair_command(args.collect()),
         Some("export") => export_command(args.collect()),
         Some("diagnostics") => diagnostics_command(args.collect()),
+        Some("decompress-zstd") => decompress_zstd_command(args.collect()),
         Some(command) => {
             print_usage();
             Err(format!("unknown command `{command}`").into())
@@ -56,6 +57,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     }
+}
+
+fn decompress_zstd_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let [input] = args.as_slice() else {
+        return Err("decompress-zstd requires exactly one input path".into());
+    };
+    let file = fs::File::open(input)?;
+    let stdout = std::io::stdout();
+    decode_zstd(file, stdout.lock())?;
+    Ok(())
+}
+
+fn decode_zstd<R: Read, W: Write>(reader: R, mut writer: W) -> std::io::Result<u64> {
+    let mut decoder = zstd::stream::read::Decoder::new(reader)?;
+    std::io::copy(&mut decoder, &mut writer)
 }
 
 fn doctor_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -1297,8 +1313,9 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_diagnostic_bundle, diagnostics_command, doctor_command, encode_file_component,
-        events_for_run, export_command, is_shutdown_frame, persist_run_data, repair_command,
+        build_diagnostic_bundle, decode_zstd, diagnostics_command, doctor_command,
+        encode_file_component, events_for_run, export_command, is_shutdown_frame, persist_run_data,
+        repair_command,
     };
     use orchetrace_ingest::{RunCatalog, RunState};
     use orchetrace_protocol::{CanonicalEvent, EventType, RuntimeKind};
@@ -1316,6 +1333,17 @@ mod tests {
             encode_file_component("deepseek-harness:本地/root"),
             "646565707365656b2d6861726e6573733ae69cace59cb02f726f6f74"
         );
+    }
+
+    #[test]
+    fn bundled_decoder_reads_concatenated_zstd_frames() {
+        let mut frames = zstd::encode_all(b"first\n".as_slice(), 1).unwrap();
+        frames.extend(zstd::encode_all(b"second\n".as_slice(), 1).unwrap());
+        let mut decoded = Vec::new();
+
+        decode_zstd(frames.as_slice(), &mut decoded).unwrap();
+
+        assert_eq!(decoded, b"first\nsecond\n");
     }
 
     #[test]

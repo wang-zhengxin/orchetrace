@@ -132,6 +132,10 @@ async function decompressZstdFile(path: string): Promise<Buffer> {
   // Harness persistence is a concatenation of hundreds of independent Zstd
   // frames. Node's one-shot decoder stops after frame one, while the reference
   // zstd CLI correctly walks the complete stream.
+  const bundled = process.env.ORCHETRACE_ZSTD_PATH;
+  if (bundled) {
+    return execFileBuffer(bundled, ["decompress-zstd", path]);
+  }
   for (const command of ["/opt/homebrew/bin/zstd", "/usr/local/bin/zstd", "zstd"]) {
     try {
       return await execZstd(command, path);
@@ -143,8 +147,12 @@ async function decompressZstdFile(path: string): Promise<Buffer> {
 }
 
 function execZstd(command: string, path: string): Promise<Buffer> {
+  return execFileBuffer(command, ["-dc", path]);
+}
+
+function execFileBuffer(command: string, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    execFile(command, ["-dc", path], { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 }, (error, stdout) => {
+    execFile(command, args, { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout as Buffer);
     });

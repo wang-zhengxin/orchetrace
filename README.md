@@ -7,7 +7,9 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 它不是 Agent 编排器，也不替代各运行时自己的交互界面。Orchetrace 只观察运行时已经产生的事实，并将它们转换为一致、可回放的诊断视图。
 
-> 当前状态：`0.1.0-alpha`。核心链路已经可运行，适合本地试用和 Adapter 开发；安装包、数据保留策略和多版本兼容仍在加固中。
+> 当前状态：`0.1.0-beta candidate`。核心链路、数据治理和四运行时 Adapter 已可运行；跨平台安装包流水线已经建立，正式签名、notarization、升级与回滚验证仍在加固中。
+
+完整使用、运维、扩展与故障排查说明见 [Orchetrace Wiki](wiki/Home.md)。
 
 ## 终端回放演示
 
@@ -63,7 +65,7 @@ flowchart LR
 
 - Rust 1.88 或更新版本；
 - Node.js 22 或更新版本；
-- `zstd` 命令（DeepSeek Harness 多帧 persistence 被动监听）；
+- 从源码运行 DeepSeek Harness Adapter 时需要 `zstd` 命令；桌面安装包使用内置 `otrace` 解压能力；
 - macOS、Linux 或 Windows；
 - 启动桌面壳时需要本机已安装 [Tauri 2 对应的系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
@@ -307,6 +309,27 @@ npm run desktop:dev
 
 桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness、Codex 四个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
 
+## 打包与发布
+
+正式安装包内置 `otrace`（含多帧 Zstandard 解压）、Node.js 22 运行时和四套 TypeScript Adapter，不依赖用户预装 Node.js 或 `zstd`，也不会从开发源码目录加载脚本。为了避免打入依赖 Homebrew 动态库的不可移植二进制，本地打包必须显式指向 Node.js 官方发行包：
+
+```bash
+export ORCHETRACE_RELEASE_NODE=/path/to/node-v22.x/bin/node
+export ORCHETRACE_NODE_LICENSE=/path/to/node-v22.x/LICENSE
+
+npm run desktop:release:prepare -- --target aarch64-apple-darwin
+npm run desktop:release:verify -- --target aarch64-apple-darwin
+
+cd apps/desktop
+cargo tauri build --ci \
+  --target aarch64-apple-darwin \
+  --config src-tauri/tauri.release.conf.json
+```
+
+安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
+
+推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
+
 ## 验证
 
 ```bash
@@ -416,8 +439,8 @@ otrace diagnostics --db /path/to/orchetrace.db --output diagnostics.json
 - Pi 被动 watcher 已缓存解析记录并仅读取追加 byte range，但活动分支语义仍会从内存记录重建；
 - Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
-- DeepSeek Harness 被动 watcher 依赖 `zstd` CLI；精确的瞬时 Agent status 仍需要 Cordis Observer；
-- Tauri bundle、代码签名、自动更新与跨平台安装验证尚未完成；
+- 从源码单独运行 DeepSeek Harness watcher 仍依赖 `zstd` CLI；桌面安装包已通过内置 `otrace` 解压，精确的瞬时 Agent status 仍需要 Cordis Observer；
+- Tauri bundle 与四平台构建矩阵已完成；Developer ID/Windows 证书签名、macOS notarization、自动更新和跨平台升级回滚验证尚未完成；
 - Orchetrace 仍是工作名称，公开发行前需要完成包名和商标检查。
 
 ## License

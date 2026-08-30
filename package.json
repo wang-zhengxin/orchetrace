@@ -33,6 +33,8 @@
     "test:web": "node --test apps/web/*.test.js",
     "benchmark:adapter-tail": "node scripts/benchmark-adapter-tail.mjs",
     "desktop:prepare": "node scripts/build-desktop.mjs",
+    "desktop:release:prepare": "node scripts/prepare-release.mjs",
+    "desktop:release:verify": "node scripts/verify-release.mjs",
     "desktop:dev": "node scripts/run-desktop.mjs run",
     "desktop:check": "node scripts/run-desktop.mjs check",
     "tui": "cargo run -q -p orchetrace-cli --bin orche --",

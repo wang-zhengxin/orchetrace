@@ -1,0 +1,101 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  desktop:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon
+            platform: macos-15
+            target: aarch64-apple-darwin
+          - label: macOS Intel
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+          - label: Linux x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - label: Windows x64
+            platform: windows-2022
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Tauri Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Set up official Node.js runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Expose portable Node.js binary
+        shell: bash
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_NODE=' + process.execPath + '\n')"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: release-${{ matrix.target }}
+
+      - name: Test workspace
+        run: |
+          npm run check
+          cargo test --workspace --locked
+
+      - name: Prepare bundled sidecars and adapters
+        run: node scripts/prepare-release.mjs --target ${{ matrix.target }}
+
+      - name: Verify prepared runtime
+        run: node scripts/verify-release.mjs --target ${{ matrix.target }}
+
+      - name: Build installers and create draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: "Orchetrace v__VERSION__ Beta"
+          releaseBody: |
+            Beta desktop build for Claude Code, Codex, Pi, and DeepSeek Harness observability.
+
+            This draft is intentionally unpublished until installation and upgrade smoke tests pass.
+          releaseDraft: true
+          prerelease: true
+          args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json

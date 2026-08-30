@@ -300,27 +300,39 @@ fn development_cli_path() -> PathBuf {
         .join(executable)
 }
 
-fn resolve_cli_path() -> PathBuf {
+fn packaged_executable(resource_dir: &Path, name: &str) -> Option<PathBuf> {
+    let executable = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    let mut candidates = Vec::new();
+    if let Ok(current) = env::current_exe()
+        && let Some(parent) = current.parent()
+    {
+        candidates.push(parent.join(&executable));
+    }
+    candidates.push(resource_dir.join(&executable));
+    candidates.push(resource_dir.join("binaries").join(&executable));
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn resolve_cli_path(resource_dir: &Path) -> PathBuf {
     if let Some(configured) = env::var_os("ORCHETRACE_CLI_PATH") {
         return PathBuf::from(configured);
     }
-    let executable = if cfg!(windows) {
-        "otrace.exe"
-    } else {
-        "otrace"
-    };
-    if let Ok(current) = env::current_exe()
-        && let Some(sibling) = current.parent().map(|parent| parent.join(executable))
-        && sibling.is_file()
-    {
-        return sibling;
+    if let Some(packaged) = packaged_executable(resource_dir, "otrace") {
+        return packaged;
     }
     development_cli_path()
 }
 
-fn resolve_node_path() -> PathBuf {
+fn resolve_node_path(resource_dir: &Path) -> PathBuf {
     if let Some(configured) = env::var_os("ORCHETRACE_NODE_PATH") {
         return PathBuf::from(configured);
+    }
+    if let Some(packaged) = packaged_executable(resource_dir, "orchetrace-node") {
+        return packaged;
     }
     let executable = if cfg!(windows) { "node.exe" } else { "node" };
     if let Some(path) = env::var_os("PATH") {
@@ -344,17 +356,20 @@ fn resolve_node_path() -> PathBuf {
     PathBuf::from(executable)
 }
 
-fn development_claude_script(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../packages/claude-adapter/src")
-        .join(name)
-}
-
 fn development_adapter_entry(package: &str, entrypoint: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../packages")
         .join(package)
         .join(entrypoint)
+}
+
+fn resolve_adapter_entry(resource_dir: &Path, package: &str, entrypoint: &str) -> PathBuf {
+    let packaged = resource_dir.join("packages").join(package).join(entrypoint);
+    if packaged.is_file() {
+        packaged
+    } else {
+        development_adapter_entry(package, entrypoint)
+    }
 }
 
 fn expand_home(value: &str, home: &Path) -> PathBuf {
@@ -371,16 +386,19 @@ fn runtime_observer_config(
     runtime: &'static str,
     app_data_dir: &Path,
     user_home: &Path,
+    resource_dir: &Path,
 ) -> Result<RuntimeObserverConfig, String> {
     let descriptor = orchetrace_protocol::runtime_descriptor(runtime)
         .ok_or_else(|| format!("runtime descriptor {runtime} is unavailable"))?;
     Ok(RuntimeObserverConfig {
         runtime: descriptor.id,
-        node_path: resolve_node_path(),
+        node_path: resolve_node_path(resource_dir),
+        helper_path: resolve_cli_path(resource_dir),
         auto_script: env::var_os(descriptor.observer.script_env)
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                development_adapter_entry(
+                resolve_adapter_entry(
+                    resource_dir,
                     descriptor.observer.package,
                     descriptor.observer.entrypoint,
                 )
@@ -414,6 +432,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
+            let resource_dir = app.path().resource_dir()?;
             let configured_data_dir = env::var_os("ORCHETRACE_DATA_DIR").map(PathBuf::from);
             let data_dir = configured_data_dir.unwrap_or_else(|| app_data_dir.join("data"));
             let legacy_snapshot = env::var_os("ORCHETRACE_SNAPSHOT")
@@ -426,7 +445,7 @@ pub fn run() {
                     }
                 });
             let ingest = ManagedIngest::new(IngestConfig {
-                cli_path: resolve_cli_path(),
+                cli_path: resolve_cli_path(&resource_dir),
                 data_dir: data_dir.clone(),
                 database_path: app_data_dir.join("orchetrace.db"),
                 ingest_endpoint: "127.0.0.1:43117".to_owned(),
@@ -437,18 +456,25 @@ pub fn run() {
             let claude_runtime = orchetrace_protocol::runtime_descriptor("claude-code")
                 .ok_or("Claude runtime descriptor is unavailable")?;
             let claude = ManagedClaude::new(ClaudeConfig {
-                node_path: resolve_node_path(),
+                node_path: resolve_node_path(&resource_dir),
                 auto_script: env::var_os(claude_runtime.observer.script_env)
                     .map(PathBuf::from)
                     .unwrap_or_else(|| {
-                        development_adapter_entry(
+                        resolve_adapter_entry(
+                            &resource_dir,
                             claude_runtime.observer.package,
                             claude_runtime.observer.entrypoint,
                         )
                     }),
                 hook_script: env::var_os("ORCHETRACE_CLAUDE_HOOK_SCRIPT")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| development_claude_script("hook-cli.ts")),
+                    .unwrap_or_else(|| {
+                        resolve_adapter_entry(
+                            &resource_dir,
+                            claude_runtime.observer.package,
+                            "src/hook-cli.ts",
+                        )
+                    }),
                 projects_dir: env::var_os(claude_runtime.observer.sessions_env)
                     .map(PathBuf::from)
                     .unwrap_or_else(|| expand_home(claude_runtime.session_directory, &user_home)),
@@ -462,7 +488,7 @@ pub fn run() {
                 .iter()
                 .filter(|descriptor| descriptor.id != "claude-code")
                 .map(|descriptor| {
-                    runtime_observer_config(descriptor.id, &app_data_dir, &user_home)
+                    runtime_observer_config(descriptor.id, &app_data_dir, &user_home, &resource_dir)
                         .map(|config| (descriptor.id, ManagedRuntimeObserver::new(config)))
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -519,7 +545,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_json, run_file};
+    use super::{packaged_executable, read_json, resolve_adapter_entry, run_file};
     use serde_json::json;
     use std::{
         fs,
@@ -566,6 +592,33 @@ mod tests {
             read_json(&directory.join("missing.json"))
                 .expect_err("missing file should fail")
                 .contains("missing.json")
+        );
+
+        fs::remove_dir_all(directory).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn packaged_resources_are_preferred_over_development_paths() {
+        let directory = temp_dir();
+        let executable_name = if cfg!(windows) {
+            "orchetrace-test-runtime.exe"
+        } else {
+            "orchetrace-test-runtime"
+        };
+        let executable = directory.join(executable_name);
+        let adapter = directory.join("packages/example-adapter/src/auto-cli.ts");
+        fs::create_dir_all(adapter.parent().expect("adapter should have a parent"))
+            .expect("adapter directory should be created");
+        fs::write(&executable, b"runtime").expect("runtime should be written");
+        fs::write(&adapter, b"export {};").expect("adapter should be written");
+
+        assert_eq!(
+            packaged_executable(&directory, "orchetrace-test-runtime"),
+            Some(executable)
+        );
+        assert_eq!(
+            resolve_adapter_entry(&directory, "example-adapter", "src/auto-cli.ts"),
+            adapter
         );
 
         fs::remove_dir_all(directory).expect("temp directory should be removed");
