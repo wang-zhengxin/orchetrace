@@ -23,6 +23,9 @@ mod live;
 
 use live::{LiveHub, start_live_server};
 
+const TIMELINE_PAGE_SIZE: usize = 1_000;
+const TIMELINE_OVERVIEW_SIZE: usize = 500;
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("otrace: {error}");
@@ -330,20 +333,23 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         storage.insert_events(&events)?;
     }
     let retention_outcome = storage.apply_retention(&retention_policy)?;
-    let events = storage.load_events()?;
     if let Some(path) = &events_path {
+        let events = storage.load_events()?;
         rewrite_events(path, &events)?;
     }
-    let event_count = events.len();
+    let event_count = storage.event_count()?;
     let checkpoint = storage.load_checkpoint()?;
     let (ingest, checkpoint_status) = match checkpoint {
         Some(checkpoint) if checkpoint.event_count == event_count => {
-            match IngestStore::from_events_with_runs(events, checkpoint.runs) {
+            match IngestStore::from_cached_events_with_runs(
+                storage.load_cached_events()?,
+                checkpoint.runs,
+            ) {
                 Ok(ingest) if ingest.catalog() == checkpoint.catalog => (ingest, "restored"),
                 Ok(_) | Err(_) => (IngestStore::from_events(storage.load_events()?)?, "rebuilt"),
             }
         }
-        _ => (IngestStore::from_events(events)?, "rebuilt"),
+        _ => (IngestStore::from_events(storage.load_events()?)?, "rebuilt"),
     };
     let catalog = ingest.catalog();
     storage.save_checkpoint(&ingest.runs(), &catalog, event_count)?;
@@ -708,8 +714,15 @@ fn persist_run_data(
     fs::create_dir_all(&runs_dir)?;
     fs::create_dir_all(&deltas_dir)?;
     for run in runs {
+        let delta = deltas.iter().find(|delta| delta.run_id == run.run_id);
+        if delta.is_none_or(|delta| delta.timeline.is_some()) {
+            let timeline_replace_from = delta
+                .and_then(|delta| delta.timeline.as_ref())
+                .map(|timeline| timeline.replace_from);
+            persist_timeline_pages(data_dir, run, timeline_replace_from)?;
+        }
         let path = runs_dir.join(format!("run-{}.json", encode_file_component(&run.run_id)));
-        write_json_atomic(&path, &run.snapshot)?;
+        write_json_atomic(&path, &persisted_run_snapshot(run)?)?;
     }
     for delta in deltas {
         let path = deltas_dir.join(format!("run-{}.json", encode_file_component(&delta.run_id)));
@@ -725,6 +738,88 @@ fn persist_run_data(
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
+        }
+        let timeline_directory = data_dir
+            .join("timelines")
+            .join(format!("run-{}", encode_file_component(run_id)));
+        match fs::remove_dir_all(timeline_directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn persisted_run_snapshot(run: &RunState) -> Result<Value, serde_json::Error> {
+    let mut value = serde_json::to_value(&run.snapshot)?;
+    let timeline = &run.snapshot.timeline;
+    if timeline.len() <= TIMELINE_PAGE_SIZE {
+        return Ok(value);
+    }
+    let overview = (0..TIMELINE_OVERVIEW_SIZE)
+        .map(|index| {
+            let source_index = index * (timeline.len() - 1) / (TIMELINE_OVERVIEW_SIZE - 1);
+            &timeline[source_index]
+        })
+        .collect::<Vec<_>>();
+    value["timeline"] = serde_json::to_value(overview)?;
+    value["timeline_paging"] = json!({
+        "schema_version": 1,
+        "total_entries": timeline.len(),
+        "page_size": TIMELINE_PAGE_SIZE,
+        "page_count": timeline.len().div_ceil(TIMELINE_PAGE_SIZE),
+        "complete": false
+    });
+    Ok(value)
+}
+
+fn persist_timeline_pages(
+    data_dir: &Path,
+    run: &RunState,
+    replace_from: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = data_dir
+        .join("timelines")
+        .join(format!("run-{}", encode_file_component(&run.run_id)));
+    if run.snapshot.timeline.len() <= TIMELINE_PAGE_SIZE {
+        match fs::remove_dir_all(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        return Ok(());
+    }
+    let existed = directory.is_dir();
+    fs::create_dir_all(&directory)?;
+    let page_count = run.snapshot.timeline.len().div_ceil(TIMELINE_PAGE_SIZE);
+    let first_page = if existed {
+        replace_from.unwrap_or(0) / TIMELINE_PAGE_SIZE
+    } else {
+        0
+    };
+    for page in first_page..page_count {
+        let start = page * TIMELINE_PAGE_SIZE;
+        let end = (start + TIMELINE_PAGE_SIZE).min(run.snapshot.timeline.len());
+        write_json_atomic(
+            &directory.join(format!("page-{page:06}.json")),
+            &run.snapshot.timeline[start..end],
+        )?;
+    }
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(page) = name
+            .strip_prefix("page-")
+            .and_then(|value| value.strip_suffix(".json"))
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        if page >= page_count {
+            fs::remove_file(entry.path())?;
         }
     }
     Ok(())
@@ -757,6 +852,22 @@ fn prune_unlisted_run_files(
                 && !active_files.contains(file_name)
             {
                 fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    let timelines_dir = data_dir.join("timelines");
+    if timelines_dir.exists() {
+        for entry in fs::read_dir(&timelines_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(encoded) = name.to_str().and_then(|name| name.strip_prefix("run-")) else {
+                continue;
+            };
+            if !active_files.contains(&format!("run-{encoded}.json")) {
+                fs::remove_dir_all(entry.path())?;
             }
         }
     }
@@ -828,7 +939,7 @@ fn rewrite_events(
     Ok(())
 }
 
-fn write_json_atomic<T: Serialize>(
+fn write_json_atomic<T: Serialize + ?Sized>(
     path: &Path,
     value: &T,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -878,8 +989,13 @@ fn print_usage() {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_file_component, is_shutdown_frame};
+    use super::{encode_file_component, is_shutdown_frame, persist_run_data};
+    use orchetrace_ingest::{RunCatalog, RunState};
     use serde_json::json;
+    use std::{
+        fs, process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn run_id_file_names_are_path_safe_and_utf8_stable() {
@@ -901,5 +1017,69 @@ mod tests {
         assert!(!is_shutdown_frame(
             &json!({ "kind": "event", "protocol": 1 })
         ));
+    }
+
+    #[test]
+    fn long_timelines_are_persisted_as_an_overview_and_pages() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "orchetrace-timeline-pages-{}-{nonce}",
+            process::id()
+        ));
+        let timeline = (0..1_005)
+            .map(|index| {
+                json!({
+                    "session_id": "root",
+                    "at": format!("2026-01-01T00:{:02}:{:02}.000Z", (index / 60) % 60, index % 60),
+                    "kind": "message",
+                    "label": format!("event-{index}"),
+                    "outcome": null
+                })
+            })
+            .collect::<Vec<_>>();
+        let run: RunState = serde_json::from_value(json!({
+            "run_id": "runtime:4:test:4:root",
+            "source_id": "test",
+            "runtime": "synthetic-runtime",
+            "snapshot": {
+                "schema_version": 1,
+                "root_session_id": "root",
+                "runtimes": ["synthetic-runtime"],
+                "event_count": 1_005,
+                "started_at": "2026-01-01T00:00:00.000Z",
+                "last_activity_at": "2026-01-01T00:16:44.000Z",
+                "agents": [],
+                "edges": [],
+                "timeline": timeline
+            }
+        }))
+        .unwrap();
+        let catalog: RunCatalog = serde_json::from_value(json!({
+            "schema_version": 1,
+            "pending_event_count": 0,
+            "runs": []
+        }))
+        .unwrap();
+
+        persist_run_data(&directory, &[run.clone()], &[], &catalog, &[]).unwrap();
+        let encoded = encode_file_component(&run.run_id);
+        let snapshot: serde_json::Value = serde_json::from_slice(
+            &fs::read(directory.join("runs").join(format!("run-{encoded}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot["timeline"].as_array().unwrap().len(), 500);
+        assert_eq!(snapshot["timeline_paging"]["total_entries"], 1_005);
+        assert_eq!(snapshot["timeline_paging"]["page_count"], 2);
+        let pages = directory.join("timelines").join(format!("run-{encoded}"));
+        let first: serde_json::Value =
+            serde_json::from_slice(&fs::read(pages.join("page-000000.json")).unwrap()).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_slice(&fs::read(pages.join("page-000001.json")).unwrap()).unwrap();
+        assert_eq!(first.as_array().unwrap().len(), 1_000);
+        assert_eq!(second.as_array().unwrap().len(), 5);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

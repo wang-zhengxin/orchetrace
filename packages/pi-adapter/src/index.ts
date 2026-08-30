@@ -8,7 +8,16 @@ export const piAdapter = defineAdapter({
     new PiAutoDiscovery(sink, options),
 });
 
-export { loadPiSession, parsePiSession } from "./loader.ts";
+export {
+  loadPiSession,
+  parsePiSession,
+  parsePiSessionText,
+  PiIncrementalSessionCache,
+} from "./loader.ts";
+export type {
+  PiIncrementalSessionCacheOptions,
+  PiIncrementalSessionLoadResult,
+} from "./loader.ts";
 export { mapPiSession } from "./mapper.ts";
 export { PiRpcMapper } from "./rpc-mapper.ts";
 export { PiLiveBridge } from "./live-bridge.ts";

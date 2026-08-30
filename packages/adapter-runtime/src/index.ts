@@ -12,6 +12,7 @@ export type {
   AcknowledgedCanonicalEventSink,
   CanonicalEventSink,
   NdjsonTcpSinkOptions,
+  NdjsonSocket,
 } from "./ndjson-sink.ts";
 export type { FileTailCursor, FileTailRead, FileTailReadOptions } from "./file-tail.ts";
 export type {

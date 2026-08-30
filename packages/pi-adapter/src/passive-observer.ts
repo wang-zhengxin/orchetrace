@@ -2,7 +2,8 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promise
 import { dirname, resolve } from "node:path";
 
 import type { AcknowledgedCanonicalEventSink } from "../../adapter-runtime/src/index.ts";
-import { loadPiSession, parsePiSession } from "./loader.ts";
+import { PiIncrementalSessionCache } from "./loader.ts";
+import { mapPiSession } from "./mapper.ts";
 import type { PiDiagnostic } from "./types.ts";
 
 interface FileSnapshot {
@@ -30,6 +31,8 @@ export interface PiPassiveObserverOptions {
   sourceId?: string;
   pollMs?: number;
   ackTimeoutMs?: number;
+  maxCachedBytes?: number;
+  maxReadBytes?: number;
   allowPartial?: boolean;
   onDiagnostic?: (diagnostic: PiDiagnostic) => void;
 }
@@ -50,6 +53,7 @@ export class PiPassiveObserver {
   private timer?: NodeJS.Timeout;
   private stopped = false;
   private scanTail: Promise<unknown> = Promise.resolve();
+  private readonly sessionCache: PiIncrementalSessionCache;
 
   constructor(
     transcriptPath: string,
@@ -59,6 +63,10 @@ export class PiPassiveObserver {
     this.transcriptPath = resolve(transcriptPath);
     this.sink = sink;
     this.options = options;
+    this.sessionCache = new PiIncrementalSessionCache(this.transcriptPath, {
+      maxCachedBytes: options.maxCachedBytes,
+      maxReadBytes: options.maxReadBytes,
+    });
   }
 
   async start(): Promise<PiPassiveScanResult> {
@@ -116,17 +124,15 @@ export class PiPassiveObserver {
       return { changed: false, emittedEvents: 0, sessionId: state.sessionId };
     }
 
-    const loaded = await loadPiSession(this.transcriptPath, {
-      sourceId: state.sourceId,
-      sessionId: state.sessionId,
-    });
-    for (const diagnostic of loaded.diagnostics) this.report(diagnostic);
-    if (!this.options.allowPartial && loaded.diagnostics.some((item) => item.level === "error")) {
+    const loaded = await this.sessionCache.load(state.sessionId);
+    for (const diagnostic of loaded.parsed.diagnostics) this.report(diagnostic);
+    if (!this.options.allowPartial && loaded.parsed.diagnostics.some((item) => item.level === "error")) {
       throw new Error("Pi session contains errors; passive cursor was not advanced");
     }
 
+    const mappedEvents = mapPiSession(loaded.parsed, state.sourceId);
     const eventIds = new Set(state.eventIds);
-    const candidates = loaded.events.filter((event) => !eventIds.has(event.event_id));
+    const candidates = mappedEvents.filter((event) => !eventIds.has(event.event_id));
     for (const event of candidates) {
       await this.sink.write(event);
       eventIds.add(event.event_id);
@@ -146,7 +152,7 @@ export class PiPassiveObserver {
 
   private async ensureState(): Promise<PiPassiveState> {
     if (this.state) return this.state;
-    const identity = await parsePiSession(this.transcriptPath);
+    const identity = (await this.sessionCache.load()).parsed;
     const sourceId = this.options.sourceId ?? "pi-local";
     try {
       const parsed: unknown = JSON.parse(await readFile(this.options.statePath, "utf8"));

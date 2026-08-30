@@ -4,7 +4,7 @@ import { basename, dirname, relative, resolve } from "node:path";
 
 import type { AcknowledgedCanonicalEventSink } from "../../adapter-runtime/src/index.ts";
 import type { CanonicalEvent } from "../../protocol-ts/src/index.ts";
-import { loadClaudeSources } from "./loader.ts";
+import { ClaudeIncrementalSourceCache } from "./loader.ts";
 import { mapClaudeSources } from "./mapper.ts";
 import type { ClaudeAgentSource, ClaudeDiagnostic } from "./types.ts";
 
@@ -36,6 +36,8 @@ export interface ClaudeLiveObserverOptions {
   statePath: string;
   pollMs?: number;
   ackTimeoutMs?: number;
+  maxCachedBytes?: number;
+  maxReadBytes?: number;
   allowPartial?: boolean;
   onDiagnostic?: (diagnostic: ClaudeDiagnostic) => void;
 }
@@ -57,6 +59,7 @@ export class ClaudeLiveObserver {
   private stopped = false;
   private scanTail: Promise<unknown> = Promise.resolve();
   private pendingCommit?: PendingCommit;
+  private readonly sourceCache: ClaudeIncrementalSourceCache;
 
   constructor(
     transcriptPath: string,
@@ -66,6 +69,10 @@ export class ClaudeLiveObserver {
     this.transcriptPath = resolve(transcriptPath);
     this.sink = sink;
     this.options = options;
+    this.sourceCache = new ClaudeIncrementalSourceCache(this.transcriptPath, {
+      maxCachedBytes: options.maxCachedBytes,
+      maxReadBytes: options.maxReadBytes,
+    });
   }
 
   async start(): Promise<void> {
@@ -125,7 +132,7 @@ export class ClaudeLiveObserver {
 
     const replacedLocations = replacementLocations(this.transcriptPath, state.files, files);
     const generation = replacedLocations.size > 0 ? state.generation + 1 : state.generation;
-    const loaded = await loadClaudeSources(this.transcriptPath, {
+    const loaded = await this.sourceCache.load({
       sourceId: state.sourceId,
       sessionId: this.options.sessionId,
     });

@@ -31,6 +31,7 @@
     "test:codex": "node --test packages/codex-adapter/test/*.test.ts",
     "test:pi-extension": "node --test packages/pi-telemetry-extension/test/*.test.ts",
     "test:web": "node --test apps/web/*.test.js",
+    "benchmark:adapter-tail": "node scripts/benchmark-adapter-tail.mjs",
     "desktop:prepare": "node scripts/build-desktop.mjs",
     "desktop:dev": "node scripts/run-desktop.mjs run",
     "desktop:check": "node scripts/run-desktop.mjs check",

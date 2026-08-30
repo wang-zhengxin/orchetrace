@@ -109,14 +109,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let database_bytes = database_size(&configuration.database_path)?;
     let started = Instant::now();
     let storage = EventStore::open(&configuration.database_path)?;
-    let loaded_events = storage.load_events()?;
+    let loaded_events = storage.load_cached_events()?;
     let sqlite_reopen_load_ms = milliseconds(started.elapsed());
 
     let started = Instant::now();
     let checkpoint = storage
         .load_checkpoint()?
         .ok_or("benchmark checkpoint was not restored")?;
-    let mut restored = IngestStore::from_events_with_runs(loaded_events, checkpoint.runs)?;
+    let mut restored = IngestStore::from_cached_events_with_runs(loaded_events, checkpoint.runs)?;
     if restored.catalog() != checkpoint.catalog {
         return Err("restored Catalog does not match the checkpoint".into());
     }

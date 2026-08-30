@@ -64,6 +64,21 @@ fn read_run_delta(state: tauri::State<'_, DesktopState>, run_id: String) -> Resu
 }
 
 #[tauri::command]
+fn read_run_timeline_page(
+    state: tauri::State<'_, DesktopState>,
+    run_id: String,
+    page: u32,
+) -> Result<Value, String> {
+    read_json(
+        &state
+            .data_dir
+            .join("timelines")
+            .join(format!("run-{}", encode_run_id(&run_id)))
+            .join(format!("page-{page:06}.json")),
+    )
+}
+
+#[tauri::command]
 fn read_live_config(state: tauri::State<'_, DesktopState>) -> Result<Value, String> {
     read_json(&state.data_dir.join("live-config.json"))
 }
@@ -256,14 +271,18 @@ fn read_json(path: &Path) -> Result<Value, String> {
 }
 
 fn run_file(data_dir: &Path, collection: &str, run_id: &str) -> PathBuf {
-    let encoded = run_id
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let encoded = encode_run_id(run_id);
     data_dir
         .join(collection)
         .join(format!("run-{encoded}.json"))
+}
+
+fn encode_run_id(run_id: &str) -> String {
+    run_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn development_legacy_snapshot() -> PathBuf {
@@ -470,6 +489,7 @@ pub fn run() {
             read_catalog,
             read_run_snapshot,
             read_run_delta,
+            read_run_timeline_page,
             read_live_config,
             read_legacy_snapshot,
             managed_ingest_status,

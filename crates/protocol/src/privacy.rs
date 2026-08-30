@@ -60,6 +60,18 @@ impl PrivacyPolicy {
         self.sensitive_keys.insert(normalize_key(key.as_ref()));
     }
 
+    /// Stable, non-secret identity used to avoid rescanning an already-scrubbed store.
+    pub fn fingerprint(&self) -> String {
+        let mut fingerprint = self.capture_mode.as_str().to_owned();
+        for key in &self.sensitive_keys {
+            fingerprint.push('|');
+            fingerprint.push_str(&key.len().to_string());
+            fingerprint.push(':');
+            fingerprint.push_str(key);
+        }
+        fingerprint
+    }
+
     pub fn sanitize_event(&self, event: &mut CanonicalEvent) -> SanitizationReport {
         let capture_mode = event
             .attributes

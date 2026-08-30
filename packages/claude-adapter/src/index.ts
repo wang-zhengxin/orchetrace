@@ -8,7 +8,11 @@ export const claudeAdapter = defineAdapter({
     new ClaudeAutoDiscovery(sink, options),
 });
 
-export { loadClaudeSession, loadClaudeSources } from "./loader.ts";
+export { ClaudeIncrementalSourceCache, loadClaudeSession, loadClaudeSources } from "./loader.ts";
+export type {
+  ClaudeIncrementalSourceCacheOptions,
+  ClaudeIncrementalSourceLoadResult,
+} from "./loader.ts";
 export { ClaudeLiveObserver } from "./live-observer.ts";
 export { ClaudeAutoDiscovery };
 export { discoverClaudeTranscripts } from "./auto-discovery.ts";

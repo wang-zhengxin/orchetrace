@@ -22,24 +22,38 @@ export interface NdjsonTcpSinkOptions {
   host?: string;
   port?: number;
   maxQueue?: number;
+  maxInFlight?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
   onDiagnostic?: (diagnostic: AdapterDiagnostic) => void;
+  socketFactory?: (options: { host: string; port: number }) => NdjsonSocket;
 }
 
-/** Loopback NDJSON transport with one-at-a-time acknowledgements and replay on reconnect. */
+export interface NdjsonSocket {
+  readyState: string;
+  setNoDelay(value?: boolean): this;
+  setEncoding(encoding: BufferEncoding): this;
+  on(event: string, listener: (...args: never[]) => void): this;
+  once(event: string, listener: (...args: never[]) => void): this;
+  write(data: string): boolean;
+  destroy(): this;
+}
+
+/** Loopback NDJSON transport with bounded pipelining and replay on reconnect. */
 export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
   private readonly host: string;
   private readonly port: number;
   private readonly maxQueue: number;
+  private readonly maxInFlight: number;
   private readonly reconnectMinMs: number;
   private readonly reconnectMaxMs: number;
   private readonly queue: CanonicalEvent[] = [];
-  private socket?: net.Socket;
+  private socket?: NdjsonSocket;
   private reconnectTimer?: NodeJS.Timeout;
   private retryMs: number;
   private incoming = "";
-  private waitingFor?: string;
+  private readonly inFlight: string[] = [];
+  private writable = true;
   private closed = false;
   private readonly options: NdjsonTcpSinkOptions;
   private readonly idleWaiters: Array<() => void> = [];
@@ -50,6 +64,10 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
     this.host = options.host ?? "127.0.0.1";
     this.port = options.port ?? 43117;
     this.maxQueue = options.maxQueue ?? 50_000;
+    this.maxInFlight = options.maxInFlight ?? 32;
+    if (!Number.isSafeInteger(this.maxInFlight) || this.maxInFlight <= 0) {
+      throw new Error("Orchetrace maxInFlight must be a positive safe integer");
+    }
     this.reconnectMinMs = options.reconnectMinMs ?? 250;
     this.reconnectMaxMs = options.reconnectMaxMs ?? 10_000;
     this.retryMs = this.reconnectMinMs;
@@ -74,7 +92,7 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
   }
 
   whenIdle(timeoutMs = 10_000): Promise<void> {
-    if (this.queue.length === 0 && !this.waitingFor) return Promise.resolve();
+    if (this.queue.length === 0) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const done = () => {
         clearTimeout(timer);
@@ -92,24 +110,30 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
 
   private connect(): void {
     if (this.closed || this.socket) return;
-    const socket = net.createConnection({ host: this.host, port: this.port });
+    const socket = this.options.socketFactory?.({ host: this.host, port: this.port })
+      ?? net.createConnection({ host: this.host, port: this.port });
     this.socket = socket;
     socket.setNoDelay(true);
     socket.setEncoding("utf8");
     socket.once("connect", () => {
       this.retryMs = this.reconnectMinMs;
-      socket.write(`${JSON.stringify({ kind: "hello", protocol: 1, token: this.options.token })}\n`);
+      this.writable = socket.write(`${JSON.stringify({ kind: "hello", protocol: 1, token: this.options.token })}\n`);
       this.options.onDiagnostic?.({ level: "warning", message: "transport connected" });
       this.flush();
     });
     socket.on("data", (chunk: string) => this.receive(chunk));
+    socket.on("drain", () => {
+      this.writable = true;
+      this.flush();
+    });
     socket.once("error", (cause) => {
       this.options.onDiagnostic?.({ level: "warning", message: "transport unavailable", cause });
     });
     socket.once("close", () => {
       if (this.socket === socket) this.socket = undefined;
-      this.waitingFor = undefined;
+      this.inFlight.splice(0);
       this.incoming = "";
+      this.writable = true;
       this.scheduleReconnect();
     });
   }
@@ -124,13 +148,19 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
       if (!line) continue;
       try {
         const frame = JSON.parse(line) as { kind?: string; event_id?: string; message?: string };
-        if (frame.kind === "ack" && frame.event_id === this.waitingFor) {
+        if (frame.kind === "ack" && frame.event_id === this.inFlight[0]) {
           if (this.queue[0]?.event_id === frame.event_id) this.queue.shift();
-          this.waitingFor = undefined;
+          this.inFlight.shift();
           if (this.queue.length === 0) {
             for (const resolve of this.idleWaiters.splice(0)) resolve();
           }
           this.flush();
+        } else if (frame.kind === "ack") {
+          this.options.onDiagnostic?.({
+            level: "error",
+            message: `unexpected ingest acknowledgement ${frame.event_id ?? "<missing>"}`,
+          });
+          this.socket?.destroy();
         } else if (frame.kind === "error") {
           this.options.onDiagnostic?.({ level: "error", message: frame.message ?? "ingest rejected frame" });
           this.socket?.destroy();
@@ -142,11 +172,13 @@ export class NdjsonTcpSink implements AcknowledgedCanonicalEventSink {
   }
 
   private flush(): void {
-    if (!this.socket?.readyState || this.socket.readyState !== "open" || this.waitingFor) return;
-    const event = this.queue[0];
-    if (!event) return;
-    this.waitingFor = event.event_id;
-    this.socket.write(`${JSON.stringify(event)}\n`);
+    if (!this.socket?.readyState || this.socket.readyState !== "open" || !this.writable) return;
+    while (this.inFlight.length < this.maxInFlight && this.writable) {
+      const event = this.queue[this.inFlight.length];
+      if (!event) return;
+      this.inFlight.push(event.event_id);
+      this.writable = this.socket.write(`${JSON.stringify(event)}\n`);
+    }
   }
 
   private scheduleReconnect(): void {

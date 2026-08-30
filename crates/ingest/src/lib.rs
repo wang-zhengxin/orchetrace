@@ -48,6 +48,17 @@ pub struct RunSummary {
     pub last_activity_at: Option<String>,
 }
 
+/// Validated event material loaded from durable storage without JSON decoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedEvent {
+    pub event_id: String,
+    pub runtime: RuntimeKind,
+    pub source_id: String,
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub payload_json: Box<str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct IngestOutcome {
     pub inserted: bool,
@@ -165,6 +176,16 @@ impl StoredEvent {
     fn to_event(&self) -> Result<CanonicalEvent, IngestError> {
         serde_json::from_str(&self.payload_json).map_err(IngestError::EventJson)
     }
+
+    fn from_cached(event: CachedEvent) -> Self {
+        Self {
+            runtime: event.runtime,
+            source_id: event.source_id,
+            session_id: event.session_id,
+            parent_session_id: event.parent_session_id,
+            payload_json: event.payload_json,
+        }
+    }
 }
 
 impl SourceKey {
@@ -223,6 +244,28 @@ impl IngestStore {
     ) -> Result<Self, IngestError> {
         let mut store = Self {
             events: collect_events(events)?,
+            ..Self::default()
+        };
+        store.restore_runs(runs)?;
+        Ok(store)
+    }
+
+    pub fn from_cached_events_with_runs(
+        events: impl IntoIterator<Item = CachedEvent>,
+        runs: impl IntoIterator<Item = RunState>,
+    ) -> Result<Self, IngestError> {
+        let mut collected = BTreeMap::new();
+        for event in events {
+            let event_id = event.event_id.clone();
+            if collected
+                .insert(event_id.clone(), StoredEvent::from_cached(event))
+                .is_some()
+            {
+                return Err(IngestError::ConflictingDuplicate(event_id));
+            }
+        }
+        let mut store = Self {
+            events: collected,
             ..Self::default()
         };
         store.restore_runs(runs)?;

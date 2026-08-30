@@ -143,6 +143,16 @@ export function readRunDelta(runId, options) {
   );
 }
 
+export function readRunTimelinePage(runId, page, options) {
+  const pageName = String(page).padStart(6, "0");
+  return nativeFirst(
+    "read_run_timeline_page",
+    { runId, page },
+    `/data/timelines/run-${hexUtf8(runId)}/page-${pageName}.json`,
+    options,
+  );
+}
+
 export function readLiveConfig(options) {
   return nativeFirst("read_live_config", undefined, "/data/live-config.json", options);
 }

@@ -1,4 +1,10 @@
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+import {
+  readCompleteFileTail,
+  type FileTailCursor,
+} from "../../adapter-runtime/src/index.ts";
 
 import { mapPiSession } from "./mapper.ts";
 import type {
@@ -28,21 +34,112 @@ export async function loadPiSession(
 }
 
 export async function parsePiSession(path: string, sessionId?: string): Promise<PiParsedSession> {
-  const diagnostics: PiDiagnostic[] = [];
   let text: string;
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
     throw new Error(`cannot read Pi session ${path}: ${String(error)}`);
   }
-  const records: Array<{ line: number; value: Record<string, unknown> }> = [];
+  return parsePiSessionText(text, sessionId);
+}
+
+interface PiSourceRecord {
+  line: number;
+  value: Record<string, unknown>;
+}
+
+export function parsePiSessionText(text: string, sessionId?: string): PiParsedSession {
+  const diagnostics: PiDiagnostic[] = [];
+  const records = parsePiRecords(text, 1, diagnostics);
+  return buildPiSession(records, diagnostics, sessionId);
+}
+
+export interface PiIncrementalSessionCacheOptions {
+  maxCachedBytes?: number;
+  maxReadBytes?: number;
+}
+
+export interface PiIncrementalSessionLoadResult {
+  parsed: PiParsedSession;
+  bytesRead: number;
+  cachedBytes: number;
+}
+
+/** Caches parsed Pi JSON records and reads only complete appended byte ranges. */
+export class PiIncrementalSessionCache {
+  private readonly path: string;
+  private readonly maxCachedBytes: number;
+  private readonly maxReadBytes: number;
+  private cursor?: FileTailCursor;
+  private records: PiSourceRecord[] = [];
+  private syntaxDiagnostics: PiDiagnostic[] = [];
+  private parsed?: PiParsedSession;
+  private parsedSessionId?: string;
+
+  constructor(path: string, options: PiIncrementalSessionCacheOptions = {}) {
+    this.path = resolve(path);
+    this.maxCachedBytes = options.maxCachedBytes ?? 128 * 1024 * 1024;
+    this.maxReadBytes = options.maxReadBytes ?? 8 * 1024 * 1024;
+    if (!Number.isSafeInteger(this.maxCachedBytes) || this.maxCachedBytes <= 0) {
+      throw new Error("Pi maxCachedBytes must be a positive safe integer");
+    }
+  }
+
+  async load(sessionId?: string): Promise<PiIncrementalSessionLoadResult> {
+    let bytesRead = 0;
+    let semanticInputChanged = false;
+    while (true) {
+      const tail = await readCompleteFileTail(this.path, this.cursor, {
+        maxBytes: this.maxReadBytes,
+      });
+      bytesRead += tail.bytesRead;
+      if (tail.reset) {
+        this.records = [];
+        this.syntaxDiagnostics = [];
+        this.parsed = undefined;
+        semanticInputChanged = true;
+      }
+      if (tail.text) {
+        semanticInputChanged = true;
+        this.records.push(
+          ...parsePiRecords(tail.text, tail.startLine, this.syntaxDiagnostics),
+        );
+      }
+      this.cursor = tail.cursor;
+      if (!tail.text || tail.cursor.offset >= tail.fileSize) break;
+    }
+    const cachedBytes = this.cursor?.offset ?? 0;
+    if (cachedBytes > this.maxCachedBytes) {
+      throw new Error(`Pi parsed session cache reached ${cachedBytes} bytes; limit is ${this.maxCachedBytes}`);
+    }
+    if (!semanticInputChanged && this.parsed && this.parsedSessionId === sessionId) {
+      return { parsed: this.parsed, bytesRead, cachedBytes };
+    }
+    const diagnostics = this.syntaxDiagnostics.map((diagnostic) => ({ ...diagnostic }));
+    this.parsed = buildPiSession(this.records, diagnostics, sessionId);
+    this.parsedSessionId = sessionId;
+    return {
+      parsed: this.parsed,
+      bytesRead,
+      cachedBytes,
+    };
+  }
+}
+
+function parsePiRecords(
+  text: string,
+  startLine: number,
+  diagnostics: PiDiagnostic[],
+): PiSourceRecord[] {
+  const records: PiSourceRecord[] = [];
   for (const [index, raw] of text.split(/\r?\n/).entries()) {
     if (!raw.trim()) continue;
-    const location = `session#${index + 1}`;
+    const line = startLine + index;
+    const location = `session#${line}`;
     try {
       const value: unknown = JSON.parse(raw);
       if (!isRecord(value)) throw new Error("line is not a JSON object");
-      records.push({ line: index + 1, value });
+      records.push({ line, value });
     } catch (error) {
       diagnostics.push({
         level: "error",
@@ -52,6 +149,14 @@ export async function parsePiSession(path: string, sessionId?: string): Promise<
       });
     }
   }
+  return records;
+}
+
+function buildPiSession(
+  records: PiSourceRecord[],
+  diagnostics: PiDiagnostic[],
+  sessionId?: string,
+): PiParsedSession {
   const rawHeader = records[0]?.value;
   if (!rawHeader || rawHeader.type !== "session") throw new Error("Pi session has no leading session header");
   const headerId = sessionId ?? stringField(rawHeader, "id");

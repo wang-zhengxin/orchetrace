@@ -22,7 +22,8 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - Replay 与 Live 两种观察模式；
 - Agent 状态、activation、工具调用、错误和终态证据；
 - 多 Run Catalog、搜索、状态过滤、Inspector 和 Timeline；
-- Rust 确定性 fold、SQLite 事实存储、增量快照和 delta；
+- Rust 确定性 fold、SQLite 事实存储、checkpoint 快速恢复、增量快照和 delta；
+- 超过 1,000 条的 timeline 自动分页，首屏读取真实时间概览，历史回放与详情按需补齐；
 - WebSocket 实时通知，断开后自动降级为轮询；
 - Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和诊断抽屉；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
@@ -318,9 +319,12 @@ cargo fmt --all -- --check
 
 # 100k 合成事件性能基线
 scripts/benchmark-100k.sh --output /tmp/orchetrace-benchmark-100k.json
+
+# Claude / Pi 100k JSONL 冷读、追加读和空轮询基线
+npm run benchmark:adapter-tail
 ```
 
-当前测试集覆盖 Adapter 映射、断线重放、cursor 恢复、乱序 fold、SQLite 检查点、delta 合并、Web/Desktop bridge 和真实 sidecar 生命周期。
+当前测试集覆盖 Adapter 映射、byte-range 追加读、文件截断/替换、断线重放、有界 ACK 流水线与 socket 背压、cursor 恢复、乱序 fold、SQLite checkpoint 原始缓存恢复、timeline 分页、delta 合并、Web/Desktop bridge 和真实 sidecar 生命周期。
 
 ## 仓库结构
 
@@ -376,8 +380,8 @@ otrace prune \
 
 ## 当前限制
 
-- Claude Live 仍使用 polling，大型 transcript 尚未使用 byte-range parser cache；
-- Pi 被动 watcher 会防御性重读活动分支，大型 session 尚未使用 byte-range parser cache；
+- Claude Live 仍使用 polling，但已仅读取追加的完整 JSONL byte range；轮询频率仍需按本机会话数调整；
+- Pi 被动 watcher 已缓存解析记录并仅读取追加 byte range，但活动分支语义仍会从内存记录重建；
 - Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
 - DeepSeek Harness 被动 watcher 依赖 `zstd` CLI；精确的瞬时 Agent status 仍需要 Cordis Observer；

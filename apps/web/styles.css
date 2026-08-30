@@ -1791,6 +1791,11 @@ body {
   border-bottom: 1px solid #292b27;
 }
 
+.timeline-event.compacted {
+  z-index: 6;
+  text-shadow: 0 0 4px currentColor;
+}
+
 .activity-range {
   top: 10px;
   bottom: auto;

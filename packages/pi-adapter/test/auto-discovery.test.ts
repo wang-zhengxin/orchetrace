@@ -7,6 +7,7 @@ import test from "node:test";
 import type { AcknowledgedCanonicalEventSink } from "../../adapter-runtime/src/index.ts";
 import type { CanonicalEvent } from "../../protocol-ts/src/index.ts";
 import { PiAutoDiscovery, discoverPiTranscripts } from "../src/auto-discovery.ts";
+import { PiIncrementalSessionCache } from "../src/loader.ts";
 import { PiPassiveObserver } from "../src/passive-observer.ts";
 
 class RecordingSink implements AcknowledgedCanonicalEventSink {
@@ -54,6 +55,33 @@ const answer = {
     timestamp: 1787875203000,
   },
 };
+
+test("incremental session cache parses only appended Pi bytes", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-pi-cache-"));
+  const transcript = resolve(directory, "session.jsonl");
+  try {
+    const initialText = `${[header, model].map(JSON.stringify).join("\n")}\n`;
+    await writeFile(transcript, initialText);
+    const cache = new PiIncrementalSessionCache(transcript);
+    const initial = await cache.load();
+    assert.equal(initial.bytesRead, Buffer.byteLength(initialText));
+    assert.equal(initial.parsed.entries.length, 1);
+
+    const appendText = `${JSON.stringify(prompt)}\n`;
+    await appendFile(transcript, appendText);
+    const appended = await cache.load();
+    assert.equal(appended.bytesRead, Buffer.byteLength(appendText));
+    assert.equal(appended.parsed.entries.length, 2);
+    assert.equal(appended.parsed.activePath.at(-1)?.id, prompt.id);
+
+    const unchanged = await cache.load();
+    assert.equal(unchanged.bytesRead, 0);
+    assert.equal(unchanged.parsed.entries.length, 2);
+    assert.strictEqual(unchanged.parsed, appended.parsed);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("passively follows Pi file changes and resumes from an ACK cursor", async () => {
   const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-pi-passive-"));

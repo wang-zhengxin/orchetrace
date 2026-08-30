@@ -6,6 +6,7 @@ import test from "node:test";
 
 import type { AcknowledgedCanonicalEventSink } from "../../adapter-runtime/src/index.ts";
 import type { CanonicalEvent } from "../../protocol-ts/src/index.ts";
+import { ClaudeIncrementalSourceCache } from "../src/loader.ts";
 import { ClaudeLiveObserver } from "../src/live-observer.ts";
 
 class RecordingSink implements AcknowledgedCanonicalEventSink {
@@ -32,6 +33,31 @@ const assistantLine = (content: string, timestamp: string) =>
     timestamp,
     message: { model: "claude-sonnet-4", content: [{ type: "text", text: content }] },
   });
+
+test("incremental source cache reads only appended Claude bytes", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-claude-cache-"));
+  const transcript = resolve(directory, "session.jsonl");
+  try {
+    const initialText = `${userLine("x".repeat(16_384), "2026-08-26T00:00:00Z")}\n`;
+    await writeFile(transcript, initialText);
+    const cache = new ClaudeIncrementalSourceCache(transcript);
+    const initial = await cache.load({ sourceId: "cache-test" });
+    assert.equal(initial.bytesRead, Buffer.byteLength(initialText));
+    assert.equal(initial.sources[0].lines.length, 1);
+
+    const appendText = `${assistantLine("small append", "2026-08-26T00:00:01Z")}\n`;
+    await appendFile(transcript, appendText);
+    const appended = await cache.load({ sourceId: "cache-test" });
+    assert.equal(appended.bytesRead, Buffer.byteLength(appendText));
+    assert.equal(appended.sources[0].lines.length, 2);
+
+    const unchanged = await cache.load({ sourceId: "cache-test" });
+    assert.equal(unchanged.bytesRead, 0);
+    assert.equal(unchanged.sources[0].lines.length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("append emits only new facts and restart resumes from the persisted cursor", async () => {
   const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-claude-live-"));

@@ -14,6 +14,7 @@ import {
   readCodexIntegrationStatus,
   readRuntimeIntegrationStatus,
   readRunSnapshot,
+  readRunTimelinePage,
   startManagedIngest,
   startPiAuto,
   startHarnessAuto,
@@ -118,6 +119,17 @@ test("run snapshot uses camelCase IPC arguments and UTF-8 hex asset names", asyn
 
   assert.deepEqual(calls, [["read_run_snapshot", { runId: "pi/根" }]]);
   assert.equal(hexUtf8("pi/根"), "70692fe6a0b9");
+});
+
+test("timeline pages use bounded numeric page names", async () => {
+  const calls = [];
+  await readRunTimelinePage("pi/根", 7, {
+    invoke: async (command, args) => {
+      calls.push([command, args]);
+      return [];
+    },
+  });
+  assert.deepEqual(calls, [["read_run_timeline_page", { runId: "pi/根", page: 7 }]]);
 });
 
 test("desktop info is optional outside Tauri and resilient to command failure", async () => {

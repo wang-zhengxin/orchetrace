@@ -4,11 +4,12 @@ use std::{
     path::Path,
 };
 
-use orchetrace_ingest::{RunCatalog, RunState};
+use orchetrace_ingest::{CachedEvent, RunCatalog, RunState};
 use orchetrace_protocol::{CanonicalEvent, PrivacyPolicy, RuntimeKind, ValidationError};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+const PRIVACY_POLICY_KEY: &str = "privacy-policy-fingerprint";
 
 pub struct EventStore {
     connection: Connection,
@@ -188,6 +189,17 @@ impl EventStore {
                  COMMIT;",
             )?;
         }
+        if version <= 2 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS storage_metadata (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
+                 ) WITHOUT ROWID;
+                 PRAGMA user_version = 3;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self { connection })
     }
 
@@ -232,6 +244,25 @@ impl EventStore {
         Ok(events)
     }
 
+    pub fn load_cached_events(&self) -> Result<Vec<CachedEvent>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, runtime, source_id, session_id, parent_session_id, payload_json
+             FROM canonical_events
+             ORDER BY event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(CachedEvent {
+                event_id: row.get(0)?,
+                runtime: RuntimeKind::from_slug(row.get::<_, String>(1)?),
+                source_id: row.get(2)?,
+                session_id: row.get(3)?,
+                parent_session_id: row.get(4)?,
+                payload_json: row.get::<_, String>(5)?.into_boxed_str(),
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn event_count(&self) -> Result<usize, StorageError> {
         let count: i64 =
             self.connection
@@ -242,6 +273,18 @@ impl EventStore {
     }
 
     pub fn scrub(&mut self, policy: &PrivacyPolicy) -> Result<ScrubOutcome, StorageError> {
+        let fingerprint = policy.fingerprint();
+        let stored_fingerprint: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM storage_metadata WHERE key = ?1",
+                [PRIVACY_POLICY_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+            return Ok(ScrubOutcome::default());
+        }
         let events = self.load_events()?;
         let transaction = self
             .connection
@@ -264,6 +307,11 @@ impl EventStore {
         if outcome.updated_events > 0 {
             invalidate_checkpoint(&transaction)?;
         }
+        transaction.execute(
+            "INSERT INTO storage_metadata (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![PRIVACY_POLICY_KEY, fingerprint],
+        )?;
         transaction.commit()?;
         Ok(outcome)
     }
@@ -331,12 +379,15 @@ impl EventStore {
         &mut self,
         policy: &RetentionPolicy,
     ) -> Result<RetentionOutcome, StorageError> {
-        let events = self.load_events()?;
-        if !policy.is_configured() || events.is_empty() {
+        if !policy.is_configured() {
             return Ok(RetentionOutcome {
-                remaining_events: events.len(),
+                remaining_events: self.event_count()?,
                 ..RetentionOutcome::default()
             });
+        }
+        let events = self.load_events()?;
+        if events.is_empty() {
+            return Ok(RetentionOutcome::default());
         }
         let groups = group_events_by_run(&events);
         let mut ordered = groups.values().collect::<Vec<_>>();
@@ -684,6 +735,10 @@ mod tests {
         );
         assert_eq!(store.event_count().unwrap(), 1);
         assert_eq!(store.load_events().unwrap(), vec![event]);
+        let cached = store.load_cached_events().unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].event_id, "evt-1");
+        assert_eq!(cached[0].runtime, RuntimeKind::DeepSeekHarness);
     }
 
     #[test]
@@ -755,15 +810,23 @@ mod tests {
         let first = event("evt-1", 1, "first");
         let mut second = event("evt-2", 2, "second");
         second.session_id = "second-root".into();
-        let ingest = orchetrace_ingest::IngestStore::from_events([first, second]).unwrap();
+        let events = [first, second];
+        let ingest = orchetrace_ingest::IngestStore::from_events(events.clone()).unwrap();
         let runs = ingest.runs();
         let catalog = ingest.catalog();
         let mut store = EventStore::open_in_memory().unwrap();
+        store.insert_events(&events).unwrap();
         store.save_checkpoint(&runs, &catalog, 2).unwrap();
         let checkpoint = store.load_checkpoint().unwrap().unwrap();
         assert_eq!(checkpoint.event_count, 2);
         assert_eq!(checkpoint.runs, runs);
         assert_eq!(checkpoint.catalog, catalog);
+        let restored = orchetrace_ingest::IngestStore::from_cached_events_with_runs(
+            store.load_cached_events().unwrap(),
+            checkpoint.runs.clone(),
+        )
+        .unwrap();
+        assert_eq!(restored.catalog(), checkpoint.catalog);
 
         store.save_checkpoint(&runs[..1], &catalog, 3).unwrap();
         let partial = store.load_checkpoint().unwrap().unwrap();
@@ -806,7 +869,7 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         assert!(store.load_checkpoint().unwrap().is_none());
     }
 
@@ -853,6 +916,10 @@ mod tests {
             "metadata-only"
         );
         assert!(store.load_checkpoint().unwrap().is_none());
+        assert_eq!(
+            store.scrub(&PrivacyPolicy::metadata_only()).unwrap(),
+            ScrubOutcome::default()
+        );
     }
 
     #[test]

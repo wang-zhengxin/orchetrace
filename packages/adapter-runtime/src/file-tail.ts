@@ -15,6 +15,7 @@ export interface FileTailReadOptions {
 
 export interface FileTailRead {
   cursor: FileTailCursor;
+  fileSize: number;
   text: string;
   startLine: number;
   bytesRead: number;
@@ -58,6 +59,7 @@ export async function readCompleteFileTail(
   if (available === 0) {
     return {
       cursor: baseCursor,
+      fileSize: metadata.size,
       text: "",
       startLine: nextLine,
       bytesRead: 0,
@@ -87,6 +89,7 @@ export async function readCompleteFileTail(
     }
     return {
       cursor: baseCursor,
+      fileSize: metadata.size,
       text: "",
       startLine: nextLine,
       bytesRead: bytes.length,
@@ -102,6 +105,7 @@ export async function readCompleteFileTail(
       offset: offset + consumed.length,
       nextLine: nextLine + lines,
     },
+    fileSize: metadata.size,
     text: consumed.toString("utf8"),
     startLine: nextLine,
     bytesRead: bytes.length,

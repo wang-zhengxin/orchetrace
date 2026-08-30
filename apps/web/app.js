@@ -1,5 +1,7 @@
 import { applyRunSnapshotDelta } from "./run-delta.js";
 import { agentEventsAtTime, snapshotAtTime, timelineBounds } from "./time-travel.js";
+import { compactTimelineMarkers, indexTimelineBySession } from "./timeline-index.js";
+import { loadTimelinePages } from "./timeline-pages.js";
 import { runtimeDescriptor, registeredRuntimeDescriptors } from "./runtime-registry.js";
 import {
   disableClaudeHooks,
@@ -15,6 +17,7 @@ import {
   readPiIntegrationStatus,
   readRunDelta,
   readRunSnapshot,
+  readRunTimelinePage,
   startManagedIngest,
   startHarnessAuto,
   startCodexAuto,
@@ -79,6 +82,7 @@ const state = {
   playbackFrame: null,
   playbackLastFrame: null,
   playbackLastRender: null,
+  timelinePromise: null,
 };
 
 const refs = Object.fromEntries(
@@ -231,8 +235,10 @@ function wireInteractions() {
     state.timeCursorMs = bounds.start + (Number(refs.timelineScrubber.value) / 1000) * bounds.span;
     state.cursorPinned = state.timeCursorMs < bounds.end - 1;
     render();
+    void ensureFullTimeline();
   });
-  refs.timelinePlay.addEventListener("click", togglePlayback);
+  refs.timelineScrubber.addEventListener("pointerdown", () => void ensureFullTimeline());
+  refs.timelinePlay.addEventListener("click", () => void beginPlayback());
   refs.detailClose.addEventListener("click", closeAgentDetail);
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -243,7 +249,7 @@ function wireInteractions() {
     else if (event.key === "Escape" && state.detailOpen) closeAgentDetail();
     if (event.code === "Space" && !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) {
       event.preventDefault();
-      togglePlayback();
+      void beginPlayback();
     }
   });
   document.querySelectorAll(".mode-button").forEach((button) => {
@@ -837,6 +843,7 @@ async function loadRunSnapshot(runId, highlight) {
 
 async function loadRunDelta(runId, targetEventCount) {
   try {
+    if (state.snapshot?.timeline_paging?.complete === false) return false;
     const delta = await readRunDelta(runId);
     if (delta.run_id !== runId || delta.target_event_count !== targetEventCount) return false;
     const snapshot = applyRunSnapshotDelta(state.snapshot, delta);
@@ -852,6 +859,7 @@ function applySnapshot(snapshot, runId, highlight, delivery = "snapshot") {
     const hadSnapshot = Boolean(state.snapshot);
     state.snapshot = snapshot;
     state.loadedRunId = runId;
+    state.timelinePromise = null;
     refs.app.dataset.delivery = delivery;
   const bounds = timelineBounds(snapshot);
   if (!state.cursorPinned || !Number.isFinite(state.timeCursorMs)) state.timeCursorMs = bounds.end;
@@ -894,7 +902,10 @@ function render() {
   const view = currentView();
   refs.app.classList.toggle("dense-topology", view.agents.length > 6);
   renderRunRail();
-  refs.graphSummary.textContent = `${view.agents.length}/${snapshot.agents.length} agents · ${view.edges.length} links · ${view.timeline.length} observed events`;
+  const timelineSummary = snapshot.timeline_paging?.complete === false
+    ? `${view.timeline.length}/${snapshot.timeline_paging.total_entries} timeline events loaded`
+    : `${view.timeline.length} observed events`;
+  refs.graphSummary.textContent = `${view.agents.length}/${snapshot.agents.length} agents · ${view.edges.length} links · ${timelineSummary}`;
   renderGraph();
   renderInspector();
   renderTimeline();
@@ -1177,11 +1188,12 @@ function renderGraph() {
     }
 
     node.append(status, title, duration, provider, activity, count, evidence, toolTrail);
-    node.addEventListener("click", () => {
+    node.addEventListener("click", async () => {
       state.selectedId = agent.id;
       state.detailOpen = true;
       renderGraph();
       renderInspector();
+      await ensureFullTimeline();
     });
     refs.nodeLayer.append(node);
   }
@@ -1252,7 +1264,14 @@ function renderTimeline() {
   refs.footerStats.textContent = `${view.agents.length} agents · ${view.agents.reduce((sum, agent) => sum + agent.tool_count, 0)} tools`;
   refs.timelinePlay.textContent = state.playbackFrame ? "Ⅱ PAUSE" : cursor >= bounds.end - 1 ? "↤ REPLAY" : "▶ PLAY";
 
-  const latest = [...state.snapshot.timeline].reverse().find((item) => Date.parse(item.at) <= cursor);
+  let latest;
+  for (let index = state.snapshot.timeline.length - 1; index >= 0; index -= 1) {
+    const candidate = state.snapshot.timeline[index];
+    if (Date.parse(candidate.at) <= cursor) {
+      latest = candidate;
+      break;
+    }
+  }
   refs.timelineEventTitle.textContent = latest
     ? `${eventGlyph(latest.kind)} ${latest.label}`
     : "Before the first observed agent event";
@@ -1265,6 +1284,8 @@ function renderTimeline() {
     refs.timelineRuler.append(tick);
   }
 
+  const eventsBySession = indexTimelineBySession(state.snapshot.timeline);
+  const markerBudget = Math.max(120, Math.floor(refs.timelineLanes.clientWidth / 2));
   for (const agent of state.snapshot.agents) {
     const lane = document.createElement("div");
     lane.className = "timeline-agent-lane";
@@ -1276,13 +1297,14 @@ function renderTimeline() {
     label.className = "timeline-agent-label";
     label.textContent = agent.label;
     label.title = agent.label;
-    label.addEventListener("click", () => {
+    label.addEventListener("click", async () => {
       if (!view.agents.some((item) => item.id === agent.id)) return;
       state.selectedId = agent.id;
       state.detailOpen = true;
       renderGraph();
       renderInspector();
       renderTimeline();
+      await ensureFullTimeline();
     });
 
     const track = document.createElement("div");
@@ -1308,21 +1330,31 @@ function renderTimeline() {
       block.title = `${tool.name} · ${tool.outcome ?? "running"}`;
       track.append(block);
     }
-    for (const event of state.snapshot.timeline.filter((item) => item.session_id === agent.id)) {
+    const markers = compactTimelineMarkers(
+      eventsBySession.get(agent.id) ?? [],
+      bounds.start,
+      bounds.span,
+      markerBudget,
+    );
+    for (const summary of markers) {
+      const event = summary.event;
       const eventTime = Date.parse(event.at);
       const marker = document.createElement("button");
       marker.type = "button";
-      marker.className = `timeline-event ${event.kind} ${eventTime <= cursor ? "elapsed" : "future"}`;
+      marker.className = `timeline-event ${event.kind} ${eventTime <= cursor ? "elapsed" : "future"} ${summary.count > 1 ? "compacted" : ""}`;
       marker.style.left = `${clamp(((eventTime - bounds.start) / bounds.span) * 100, 0, 100)}%`;
       marker.textContent = eventGlyph(event.kind);
-      marker.title = `${formatClock(eventTime)} · ${event.label}`;
-      marker.addEventListener("click", () => {
+      marker.title = summary.count > 1
+        ? `${summary.count} events · ${formatClock(Date.parse(summary.from))}–${formatClock(Date.parse(summary.to))} · ${event.label}`
+        : `${formatClock(eventTime)} · ${event.label}`;
+      marker.addEventListener("click", async () => {
         stopPlayback();
         state.timeCursorMs = eventTime;
         state.cursorPinned = eventTime < bounds.end - 1;
         state.selectedId = event.session_id;
         state.detailOpen = true;
         render();
+        await ensureFullTimeline();
       });
       track.append(marker);
     }
@@ -1422,6 +1454,47 @@ function togglePlayback() {
   refs.app.classList.add("is-playing");
   state.playbackFrame = requestAnimationFrame(playbackStep);
   renderTimeline();
+}
+
+async function beginPlayback() {
+  await ensureFullTimeline();
+  if (state.snapshot?.timeline_paging?.complete === false) return;
+  togglePlayback();
+}
+
+async function ensureFullTimeline() {
+  const snapshot = state.snapshot;
+  const paging = snapshot?.timeline_paging;
+  if (!paging || paging.complete !== false) return;
+  if (state.timelinePromise) return state.timelinePromise;
+  const runId = state.loadedRunId;
+  const eventCount = snapshot.event_count;
+  const pageCount = Number(paging.page_count);
+  const totalEntries = Number(paging.total_entries);
+  if (!runId || !Number.isSafeInteger(pageCount) || pageCount <= 0) return;
+
+  const operation = (async () => {
+    const timeline = await loadTimelinePages({
+      pageCount,
+      totalEntries,
+      readPage: (page) => readRunTimelinePage(runId, page),
+    });
+    if (state.loadedRunId !== runId || state.snapshot?.event_count !== eventCount) return;
+    state.snapshot = {
+      ...state.snapshot,
+      timeline,
+      timeline_paging: { ...state.snapshot.timeline_paging, complete: true },
+    };
+    render();
+  })().catch((error) => {
+    setHealth("degraded", "TIMELINE RETRY");
+    console.warn("Unable to load complete timeline", error);
+  }).finally(() => {
+    if (state.timelinePromise === operation) state.timelinePromise = null;
+  });
+  state.timelinePromise = operation;
+  refs.timelineEventTitle.textContent = `Loading ${pageCount} timeline pages…`;
+  return operation;
 }
 
 function playbackStep(now) {
