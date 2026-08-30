@@ -75,6 +75,7 @@ jobs:
       - name: Test workspace
         run: |
           npm run check
+          npm run desktop:prepare
           cargo test --workspace --locked
 
       - name: Prepare bundled sidecars and adapters
