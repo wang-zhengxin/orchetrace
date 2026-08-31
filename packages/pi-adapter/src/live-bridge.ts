@@ -216,7 +216,11 @@ export class PiLiveBridge {
     let catchUpEvents = 0;
     let cursorMode: PiLiveStartResult["cursorMode"] = "disabled";
     try {
-      loaded = await loadPiSession(this.transcriptPath, { sourceId, sessionId });
+      loaded = await loadPiSession(this.transcriptPath, {
+        sourceId,
+        sessionId,
+        rootLifecycle: false,
+      });
       for (const diagnostic of loaded.diagnostics) this.report(diagnostic);
       if (!this.options.allowPartial && loaded.diagnostics.some((item) => item.level === "error")) {
         throw new Error("Pi session contains errors; live bootstrap was not delivered");
@@ -390,6 +394,7 @@ export class PiLiveBridge {
     const loaded = await loadPiSession(this.transcriptPath, {
       sourceId: this.liveState?.sourceId ?? this.options.sourceId,
       sessionId: this.liveState?.sessionId ?? this.options.sessionId,
+      rootLifecycle: false,
     });
     for (const diagnostic of loaded.diagnostics) this.report(diagnostic);
     if (!this.options.allowPartial && loaded.diagnostics.some((item) => item.level === "error")) {
@@ -474,7 +479,11 @@ export class PiLiveBridge {
     }
 
     const supported = response?.success === true;
-    const reloaded = await loadPiSession(this.transcriptPath, { sourceId, sessionId });
+    const reloaded = await loadPiSession(this.transcriptPath, {
+      sourceId,
+      sessionId,
+      rootLifecycle: false,
+    });
     for (const diagnostic of reloaded.diagnostics) this.report(diagnostic);
     if (!this.options.allowPartial && reloaded.diagnostics.some((item) => item.level === "error")) {
       throw new Error("Pi session contains errors during entry cursor catch-up");

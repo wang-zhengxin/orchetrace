@@ -2,9 +2,14 @@ import type { CanonicalEvent, CanonicalEventType } from "../../protocol-ts/src/i
 import type { PiEntry, PiParsedSession } from "./types.ts";
 import { mapPiTelemetryEntry } from "./telemetry.ts";
 
-export function mapPiSession(session: PiParsedSession, sourceId: string): CanonicalEvent[] {
+export function mapPiSession(
+  session: PiParsedSession,
+  sourceId: string,
+  options: { rootLifecycle?: boolean } = {},
+): CanonicalEvent[] {
   const { header, activePath, contextEntryIds, diagnostics } = session;
   const identity = finalIdentity(session);
+  const state: PiMappingState = {};
   const events: CanonicalEvent[] = [
     canonical({
       sourceId,
@@ -30,9 +35,22 @@ export function mapPiSession(session: PiParsedSession, sourceId: string): Canoni
     }),
   ];
   for (const entry of activePath) {
-    mapEntry(events, entry, header.id, sourceId, contextEntryIds.has(entry.id), diagnostics);
+    mapEntry(
+      events,
+      entry,
+      header.id,
+      sourceId,
+      contextEntryIds.has(entry.id),
+      diagnostics,
+      state,
+      options.rootLifecycle ?? true,
+    );
   }
   return uniqueEvents(events, diagnostics).sort(compareEvents);
+}
+
+interface PiMappingState {
+  activationId?: string;
 }
 
 function mapEntry(
@@ -42,6 +60,8 @@ function mapEntry(
   sourceId: string,
   inActiveContext: boolean,
   diagnostics: PiParsedSession["diagnostics"],
+  state: PiMappingState,
+  rootLifecycle: boolean,
 ): void {
   const push = (
     suffix: string,
@@ -73,6 +93,19 @@ function mapEntry(
     const message = record(entry.value.message);
     const role = stringField(message, "role");
     if (role === "user") {
+      if (rootLifecycle && state.activationId) {
+        push("previous-activation-ended", 5, "agent.activation_ended", {
+          activation_id: state.activationId,
+          status: "ready",
+          evidence: "Pi accepted the next user prompt",
+        });
+      }
+      if (rootLifecycle) {
+        state.activationId = entry.id;
+        push("activation-started", 9, "agent.activation_started", {
+          activation_id: state.activationId,
+        });
+      }
       push("prompt", 10, "prompt.accepted", { excerpt: summarize(message?.content), source: "user" });
     } else if (role === "assistant") {
       const blocks = Array.isArray(message?.content) ? message.content : [];
@@ -113,6 +146,23 @@ function mapEntry(
           message: stringField(message, "errorMessage") ?? `Pi assistant stopped with ${stopReason}`,
           category: stopReason,
         });
+      }
+      const completedWithoutStopReason =
+        !stopReason && texts.some((text) => text.trim()) && toolOffset === 0;
+      if (
+        rootLifecycle &&
+        state.activationId &&
+        ((stopReason && stopReason !== "toolUse") || completedWithoutStopReason)
+      ) {
+        push("activation-ended", 95, "agent.activation_ended", {
+          activation_id: state.activationId,
+          status: stopReason === "aborted" ? "inactive" : "ready",
+          evidence:
+            stopReason === "error"
+              ? stringField(message, "errorMessage") ?? "Pi assistant response failed"
+              : "Pi assistant response completed",
+        });
+        state.activationId = undefined;
       }
     } else if (role === "toolResult") {
       const callId = stringField(message, "toolCallId");
@@ -215,9 +265,9 @@ function finalIdentity(session: PiParsedSession): { label?: string; provider?: s
 }
 
 function entryTime(entry: PiEntry): string {
-  const message = record(entry.value.message);
-  const millis = message?.timestamp;
-  if (typeof millis === "number" && Number.isFinite(millis)) return new Date(millis).toISOString();
+  // The persisted entry timestamp records when Pi finalized this entry. Some providers reuse
+  // the preceding tool-result timestamp inside the final assistant message, which would make
+  // a completed response appear several seconds too early on the observable timeline.
   return entry.timestamp;
 }
 

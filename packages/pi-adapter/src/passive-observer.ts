@@ -13,13 +13,15 @@ interface FileSnapshot {
 }
 
 interface PiPassiveState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   transcriptPath: string;
   sourceId: string;
   sessionId: string;
   file?: FileSnapshot;
   eventIds: string[];
 }
+
+const PASSIVE_STATE_SCHEMA_VERSION = 2 as const;
 
 interface PendingCommit {
   state: PiPassiveState;
@@ -171,7 +173,7 @@ export class PiPassiveObserver {
       }
     }
     this.state = {
-      schemaVersion: 1,
+      schemaVersion: PASSIVE_STATE_SCHEMA_VERSION,
       transcriptPath: this.transcriptPath,
       sourceId,
       sessionId: identity.header.id,
@@ -206,7 +208,7 @@ function isState(value: unknown): value is PiPassiveState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const state = value as Partial<PiPassiveState>;
   return (
-    state.schemaVersion === 1 &&
+    state.schemaVersion === PASSIVE_STATE_SCHEMA_VERSION &&
     typeof state.transcriptPath === "string" &&
     typeof state.sourceId === "string" &&
     typeof state.sessionId === "string" &&

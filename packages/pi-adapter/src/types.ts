@@ -10,6 +10,8 @@ export interface PiDiagnostic {
 export interface PiSessionOptions {
   sourceId?: string;
   sessionId?: string;
+  /** RPC mode already has authoritative lifecycle events and disables this passive derivation. */
+  rootLifecycle?: boolean;
 }
 
 export interface PiLoadResult {

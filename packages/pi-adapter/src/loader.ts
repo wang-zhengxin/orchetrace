@@ -23,7 +23,9 @@ export async function loadPiSession(
   options: PiSessionOptions = {},
 ): Promise<PiLoadResult> {
   const parsed = await parsePiSession(path, options.sessionId);
-  const events = mapPiSession(parsed, options.sourceId ?? "pi-local");
+  const events = mapPiSession(parsed, options.sourceId ?? "pi-local", {
+    rootLifecycle: options.rootLifecycle ?? true,
+  });
   return {
     events,
     diagnostics: parsed.diagnostics,

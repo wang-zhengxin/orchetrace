@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -97,12 +97,17 @@ test("passively follows Pi file changes and resumes from an ACK cursor", async (
     });
     const initial = await first.scanOnce();
     assert.equal(initial.sessionId, header.id);
-    assert.equal(initial.emittedEvents, 3);
+    assert.equal(initial.emittedEvents, 4);
 
     await appendFile(transcript, `${JSON.stringify(answer)}\n`);
     const changed = await first.scanOnce();
-    assert.equal(changed.emittedEvents, 1);
-    assert.equal(firstSink.events.at(-1)?.type, "assistant.message");
+    assert.equal(changed.emittedEvents, 2);
+    assert.equal(
+      firstSink.events.some(
+        (event) => event.type === "assistant.message" && event.data.summary === "done",
+      ),
+      true,
+    );
     await first.stop();
 
     const resumedSink = new RecordingSink();
@@ -114,6 +119,38 @@ test("passively follows Pi file changes and resumes from an ACK cursor", async (
     assert.equal(unchanged.changed, false);
     assert.equal(resumedSink.events.length, 0);
     await resumed.stop();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("replays a v1 passive cursor once to backfill derived root lifecycle", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-pi-cursor-v1-"));
+  const transcript = resolve(directory, "session.jsonl");
+  const statePath = resolve(directory, "cursor.json");
+  try {
+    await writeFile(transcript, `${[header, model, prompt].map(JSON.stringify).join("\n")}\n`);
+    await writeFile(
+      statePath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        transcriptPath: transcript,
+        sourceId: "pi-project-test",
+        sessionId: header.id,
+        eventIds: [],
+      })}\n`,
+    );
+    const sink = new RecordingSink();
+    const observer = new PiPassiveObserver(transcript, sink, {
+      sourceId: "pi-project-test",
+      statePath,
+    });
+
+    const result = await observer.scanOnce();
+    assert.equal(result.emittedEvents, 4);
+    assert.equal(sink.events.some((event) => event.type === "agent.activation_started"), true);
+    assert.equal(JSON.parse(await readFile(statePath, "utf8")).schemaVersion, 2);
+    await observer.stop();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

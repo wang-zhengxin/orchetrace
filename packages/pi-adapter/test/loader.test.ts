@@ -18,10 +18,46 @@ test("selects the final Pi leaf path without turning conversation parents into a
   assert.equal(result.activeLeafId, "e10");
   assert.equal(result.activeEntryCount, 9);
   assert.equal(result.abandonedEntryCount, 1);
-  assert.equal(result.events.length, 12);
+  assert.equal(result.events.length, 16);
   assert.equal(result.events.every((event) => event.parent_session_id === undefined), true);
   assert.equal(result.events.filter((event) => event.type === "session.discovered").length, 1);
   assert.equal(result.events.some((event) => JSON.stringify(event).includes("ABANDONED")), false);
+});
+
+test("maps Pi prompt lifecycles so passive observation reports running and ready states", async () => {
+  const { events } = await loadPiSession(fixture, { sourceId: "fixture-pi" });
+  const started = events.filter((event) => event.type === "agent.activation_started");
+  const ended = events.filter((event) => event.type === "agent.activation_ended");
+
+  assert.deepEqual(started.map((event) => event.data.activation_id), ["e2", "e8"]);
+  assert.deepEqual(ended.map((event) => event.data.activation_id), ["e2", "e8"]);
+  assert.equal(ended.every((event) => event.data.status === "ready"), true);
+  assert.equal(
+    ended.find((event) => event.data.activation_id === "e2")?.source_ref?.location,
+    "session#9",
+  );
+});
+
+test("uses the persisted entry time when a provider reuses an earlier message timestamp", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "orchetrace-pi-entry-time-"));
+  const path = resolve(directory, "session.jsonl");
+  try {
+    await writeFile(
+      path,
+      [
+        '{"type":"session","version":3,"id":"pi-time","timestamp":"2026-08-31T02:00:00.000Z","cwd":"/tmp"}',
+        '{"type":"message","id":"prompt","parentId":null,"timestamp":"2026-08-31T02:00:01.000Z","message":{"role":"user","content":"go","timestamp":1788141601000}}',
+        '{"type":"message","id":"answer","parentId":"prompt","timestamp":"2026-08-31T02:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop","timestamp":1788141601000}}',
+      ].join("\n"),
+    );
+    const { events } = await loadPiSession(path);
+    assert.equal(
+      events.find((event) => event.event_id.endsWith("answer%3Aassistant"))?.occurred_at,
+      "2026-08-31T02:00:05.000Z",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("maps persisted tool calls, results, compaction, and active-context markers", async () => {
@@ -167,12 +203,12 @@ test("CLI emits Canonical Pi JSONL", async () => {
       "--output",
       output,
     ]);
-    assert.match(stderr, /mapped 12 events from 9 active entries; ignored 1 abandoned entries/);
+    assert.match(stderr, /mapped 16 events from 9 active entries; ignored 1 abandoned entries/);
     const events = (await readFile(output, "utf8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    assert.equal(events.length, 12);
+    assert.equal(events.length, 16);
     assert.equal(events.every((event) => event.runtime === "pi"), true);
     assert.equal(events.every((event) => event.source_id === "pi-cli-test"), true);
   } finally {
