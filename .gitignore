@@ -6,6 +6,7 @@
 
 # Rust / Node build output
 /target/
+/dist/
 /node_modules/
 /apps/desktop/dist/
 /apps/desktop/src-tauri/gen/

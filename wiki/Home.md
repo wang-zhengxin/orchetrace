@@ -6,12 +6,13 @@ Orchetrace 收集 Agent Runtime 已经产生的事实，将不同供应商的会
 
 Orchetrace 不是 Agent 编排器，不会代替 Runtime 终端，也不会为了画出完整流程而猜测子 Agent 或执行结果。
 
-**当前版本：** `0.1.0-alpha`
+**当前版本：** `0.1.0-beta candidate`
 
 ## 目录
 
 - [核心概念](#核心概念)
 - [运行时支持](#运行时支持)
+- [安装](#安装)
 - [快速开始](#快速开始)
 - [终端 TUI](#终端-tui)
 - [Web 与桌面端](#web-与桌面端)
@@ -73,13 +74,32 @@ flowchart LR
 
 Pi 的普通对话分支不会被当成子 Agent。如果 Pi extension 没有发送 Orchetrace telemetry，界面不会仅根据工具名称猜测拓扑。
 
+## 安装
+
+M7 提供 npm、Homebrew Formula 和 Homebrew Cask 三条 Beta 分发路径。相关包发布后可以执行：
+
+```bash
+# 终端 CLI、原生 orche/otrace 和四套 Runtime Adapter
+npm install -g @orchetrace/cli@beta
+
+# Homebrew 终端版
+brew install wang-zhengxin/tap/orchetrace
+
+# macOS 桌面版
+brew install --cask wang-zhengxin/tap/orchetrace
+```
+
+npm 主包要求 Node.js 22，通过当前平台的 optional dependency 安装 Rust 二进制。Homebrew Formula 依赖 `node@22`，Cask 安装带内置 Node.js 和 Adapter 的桌面 DMG。npm 与 Formula 都会设置可搬迁的 Adapter 根目录和 `otrace` 解压路径，不依赖 Git checkout、编译时源码目录或系统 `zstd`。
+
+当前只发布 Beta 通道：npm 使用 `beta` dist-tag，Homebrew 使用项目 Tap，不进入 npm `latest` 或 Homebrew/core。首次发布前需要由维护者创建 npm `@orchetrace` scope、`wang-zhengxin/homebrew-tap` 仓库和相应发布凭据。
+
 ## 快速开始
 
 ### 环境要求
 
-- Node.js 22；
-- Rust 1.88 或更新版本；
-- DeepSeek Harness 被动监听需要 `zstd` 命令；
+- npm 安装需要 Node.js 22；
+- 源码开发需要 Node.js 22、Rust 1.88 或更新版本；
+- 仅从源码单独运行 DeepSeek Harness Adapter 时需要 `zstd` 命令；
 - 桌面开发需要 Tauri 2 对应的系统依赖。
 
 ### 运行演示
@@ -107,7 +127,7 @@ npm run dev:web
 npm run tui
 ```
 
-安装全局命令：
+完整的全局安装建议使用 npm 或 Homebrew。从源码开发时也可以安装 Rust 命令：
 
 ```bash
 cargo install --path crates/cli --bins
@@ -470,7 +490,7 @@ Observer 需要实现 `start()`、`scanOnce()` 和 `stop()`。事件必须使用
 zstd --version
 ```
 
-被动 persistence watcher 需要本机 `zstd` CLI。Cordis Observer 可提供实时状态，但不代替冷数据回放。
+从源码单独运行被动 persistence watcher 时需要本机 `zstd` CLI。npm、Homebrew 和桌面安装包使用随包提供的 `otrace` 处理多帧 Zstandard。Cordis Observer 可提供实时状态，但不代替冷数据回放。
 
 ### 数据库可读，但界面投影不完整
 
@@ -501,13 +521,17 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - 隐私、保留、删除、体检、修复和导出；
 - 四运行时生命周期契约与结构化诊断；
 - Tauri release bundle、内置 `otrace`/Node.js/Adapter 资源与四平台 GitHub 构建矩阵；
-- 安装包资源清单、Node.js 许可文件和自动化发布前校验。
+- 安装包资源清单、Node.js 许可文件和自动化发布前校验；
+- macOS ARM/Intel、Linux x64、Windows x64 可搬迁 CLI archive 与 SHA-256；
+- npm 主包、平台原生包、离线安装烟测和 provenance 发布流程；
+- Homebrew Formula/Cask 生成、官方样式校验和 Tap 自动更新流程。
 
 ### Beta 前待完成
 
 - Developer ID 与 Windows 证书签名、macOS notarization；
 - 四平台实体安装、升级、回滚和卸载测试；
 - 自动更新通道与签名密钥轮换流程；
+- 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；
 - 桌面诊断抽屉接入 doctor/repair/export；
 - 上游 Runtime 多版本兼容矩阵；
 - 公开发布前的名称、包名和商标检查。

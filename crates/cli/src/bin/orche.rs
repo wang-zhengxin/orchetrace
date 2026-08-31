@@ -150,7 +150,7 @@ fn print_help() {
         "orche — terminal multi-Agent observer\n\n\
          Usage: orche [--data-dir PATH] [--run RUN_ID] [--refresh-ms 500] [--replay]\n\n\
          By default, orche starts the local ingest service and passively observes\n\
-         current Claude, Pi, and DeepSeek Harness sessions. --replay disables it.\n\n\
+         current Claude, Codex, Pi, and DeepSeek Harness sessions. --replay disables it.\n\n\
          Keys:\n\
            q              quit\n\
            ↑/↓ or j/k     select Agent\n\

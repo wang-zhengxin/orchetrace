@@ -71,6 +71,25 @@ flowchart LR
 
 仓库中的 TypeScript 直接使用 Node.js type stripping 运行，不需要额外 bundler。
 
+## 安装
+
+M7 发布链路提供三种安装入口。Beta 包发布后，终端版可以通过 npm 或 Homebrew 安装，桌面版可以通过 Homebrew Cask 安装：
+
+```bash
+# npm：原生 orche/otrace + 四套 Runtime Adapter
+npm install -g @orchetrace/cli@beta
+
+# Homebrew CLI
+brew install wang-zhengxin/tap/orchetrace
+
+# macOS 桌面应用
+brew install --cask wang-zhengxin/tap/orchetrace
+```
+
+npm 主包要求 Node.js 22，并通过平台专属 optional dependency 安装对应的 Rust 二进制；Homebrew Formula 依赖 `node@22`。两种终端安装都会设置可搬迁的 Adapter 根目录和内置 `otrace` 解压路径，不依赖 Git checkout 或编译时源码目录。桌面安装包仍自带 Node.js，不需要系统 Node。
+
+当前发布通道是 Beta，npm 使用 `beta` dist-tag，Homebrew 使用项目 Tap；尚不提交到 npm `latest` 或 Homebrew/core。
+
 ## 快速开始
 
 生成包含 14 个 Agent、13 条父子边和 139 个事件的演示数据，并启动 Web 工作台：
@@ -95,7 +114,7 @@ npm run dev:web
 npm run tui
 ```
 
-安装为全局命令后，可以在任意目录直接执行 `orche`：
+从源码开发时也可以安装 Rust 命令；完整的可搬迁安装建议使用上面的 npm 或 Homebrew 包：
 
 ```bash
 cargo install --path crates/cli --bins
@@ -328,7 +347,24 @@ cargo tauri build --ci \
 
 安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
 
-推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
+推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并验证 `orche`、`otrace` 与四套 Adapter 能脱离源码目录加载。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
+
+设置仓库变量 `NPM_PUBLISH=true` 后，流水线会按“平台包优先、主包最后”的顺序发布 `@orchetrace/cli@beta`，并启用 npm provenance。设置 `HOMEBREW_PUBLISH=true` 和具备 `wang-zhengxin/homebrew-tap` 写权限的 `HOMEBREW_TAP_TOKEN` 后，会依据 Release 中不可变资产的 SHA-256 自动更新 Formula 与 Cask。未设置这些开关时仍会构建、打包和验证，避免误发布。
+
+首次启用前需要先创建 npm `@orchetrace` scope（或统一修改包命名空间）和 `wang-zhengxin/homebrew-tap` 仓库，并在 npm Trusted Publisher/GitHub Secrets 中授权本工作流；流水线不会代替维护者创建外部组织、仓库或发布凭据。
+
+本地验证终端分发产物：
+
+```bash
+node scripts/build-cli-bundle.mjs \
+  --target aarch64-apple-darwin \
+  --version 0.1.0-beta.4
+
+node scripts/stage-npm-packages.mjs \
+  --target aarch64-apple-darwin \
+  --bundle dist/cli/aarch64-apple-darwin/orchetrace \
+  --version 0.1.0-beta.4
+```
 
 ## 验证
 

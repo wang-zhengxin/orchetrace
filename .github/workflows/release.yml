@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -58,7 +59,9 @@ jobs:
 
       - name: Expose portable Node.js binary
         shell: bash
-        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_NODE=' + process.execPath + '\n')"
+        run: |
+          node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_NODE=' + process.execPath + '\n')"
+          node -e "const p=require('./package.json'); const r=process.env.GITHUB_REF_TYPE==='tag'?process.env.GITHUB_REF_NAME.replace(/^v/,''):p.version; require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_VERSION=' + r + '\n')"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
@@ -84,6 +87,20 @@ jobs:
       - name: Verify prepared runtime
         run: node scripts/verify-release.mjs --target ${{ matrix.target }}
 
+      - name: Build portable CLI and npm packages
+        run: |
+          node scripts/build-cli-bundle.mjs --target ${{ matrix.target }} --version ${{ env.ORCHETRACE_RELEASE_VERSION }} --skip-build
+          node scripts/stage-npm-packages.mjs --target ${{ matrix.target }} --bundle dist/cli/${{ matrix.target }}/orchetrace --version ${{ env.ORCHETRACE_RELEASE_VERSION }}
+
+      - name: Preserve distribution artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: distribution-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            dist/cli/artifacts/
+            dist/npm/tarballs/
+
       - name: Build installers and create draft release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -100,3 +117,76 @@ jobs:
           releaseDraft: true
           prerelease: true
           args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+  distribution:
+    name: Publish CLI, npm, and Homebrew metadata
+    if: github.ref_type == 'tag'
+    needs: desktop
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up official Node.js runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.2
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Resolve release version
+        shell: bash
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_VERSION=' + process.env.GITHUB_REF_NAME.replace(/^v/,'') + '\n')"
+
+      - name: Download CLI and npm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: distribution-*
+          path: dist/distribution
+          merge-multiple: true
+
+      - name: Upload portable CLI bundles to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/distribution/cli/artifacts/*.tar.gz dist/distribution/cli/artifacts/*.sha256 --clobber
+
+      - name: Download desktop DMGs for Homebrew metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --pattern "*.dmg" --dir dist/distribution/cli/artifacts --clobber
+
+      - name: Generate Homebrew Formula and Cask
+        run: node scripts/generate-homebrew.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/distribution/cli/artifacts --output dist/homebrew --require-cask
+
+      - name: Stage main npm package
+        run: node scripts/stage-npm-packages.mjs --version "$ORCHETRACE_RELEASE_VERSION" --output dist/npm-main
+
+      - name: Publish npm beta packages with provenance
+        if: vars.NPM_PUBLISH == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: node scripts/publish-npm.mjs --version "$ORCHETRACE_RELEASE_VERSION" --platform-dir dist/distribution/npm/tarballs --main-dir dist/npm-main/tarballs --tag beta
+
+      - name: Check out Homebrew tap
+        if: vars.HOMEBREW_PUBLISH == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: wang-zhengxin/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: dist/homebrew-tap
+
+      - name: Update Homebrew tap
+        if: vars.HOMEBREW_PUBLISH == 'true'
+        working-directory: dist/homebrew-tap
+        run: |
+          mkdir -p Formula Casks
+          cp ../homebrew/Formula/orchetrace.rb Formula/orchetrace.rb
+          cp ../homebrew/Casks/orchetrace.rb Casks/orchetrace.rb
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Formula/orchetrace.rb Casks/orchetrace.rb
+          git diff --cached --quiet || git commit -m "orchetrace ${ORCHETRACE_RELEASE_VERSION}"
+          git push

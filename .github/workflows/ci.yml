@@ -76,3 +76,34 @@ jobs:
 
       - name: Check desktop shell
         run: npm run desktop:check
+
+  distribution:
+    name: Linux CLI and npm package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: distribution-linux-x64
+
+      - name: Build and verify portable CLI bundle
+        run: node scripts/build-cli-bundle.mjs --target x86_64-unknown-linux-gnu --version 0.1.0-ci.0
+
+      - name: Pack and verify npm packages
+        run: node scripts/stage-npm-packages.mjs --target x86_64-unknown-linux-gnu --bundle dist/cli/x86_64-unknown-linux-gnu/orchetrace --version 0.1.0-ci.0

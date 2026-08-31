@@ -35,10 +35,14 @@
     "desktop:prepare": "node scripts/build-desktop.mjs",
     "desktop:release:prepare": "node scripts/prepare-release.mjs",
     "desktop:release:verify": "node scripts/verify-release.mjs",
+    "distribution:test": "node --test scripts/test/*.test.mjs",
+    "cli:bundle": "node scripts/build-cli-bundle.mjs",
+    "npm:stage": "node scripts/stage-npm-packages.mjs",
+    "npm:publish": "node scripts/publish-npm.mjs",
     "desktop:dev": "node scripts/run-desktop.mjs run",
     "desktop:check": "node scripts/run-desktop.mjs check",
     "tui": "cargo run -q -p orchetrace-cli --bin orche --",
     "dev:web": "node scripts/dev-server.mjs",
-    "check": "npm run runtime:check && npm run test:runtime-sdk && npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:codex && npm run test:pi-extension && npm run test:web"
+    "check": "npm run runtime:check && npm run distribution:test && npm run test:runtime-sdk && npm run test:adapter && npm run test:claude && npm run test:pi && npm run test:codex && npm run test:pi-extension && npm run test:web"
   }
 }

@@ -41,6 +41,7 @@ impl ManagedObservers {
             children: Vec::new(),
             summary: String::new(),
         };
+        let otrace = resolve_otrace()?;
         let endpoint = INGEST_ADDRESS
             .parse::<SocketAddr>()
             .map_err(|error| error.to_string())?;
@@ -51,14 +52,13 @@ impl ManagedObservers {
                 .ok_or("ingest is active but its token is unavailable")?
         } else {
             let token = secure_token()?;
-            let otrace = resolve_otrace()?;
             let state_root = data_dir
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| data_dir.to_path_buf());
             fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
             fs::create_dir_all(&state_root).map_err(|error| error.to_string())?;
-            let mut command = Command::new(otrace);
+            let mut command = Command::new(&otrace);
             command
                 .arg("serve")
                 .arg("--listen")
@@ -140,6 +140,8 @@ impl ManagedObservers {
                 .arg("43117")
                 .arg("--token")
                 .arg(&token)
+                .env("ORCHETRACE_CLI_PATH", &otrace)
+                .env("ORCHETRACE_ZSTD_PATH", &otrace)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -268,12 +270,14 @@ fn resolve_otrace() -> Result<PathBuf, String> {
         return Ok(path);
     }
     if let Ok(current) = env::current_exe() {
-        let sibling = current.with_file_name("otrace");
+        let sibling = current.with_file_name(executable_name("otrace"));
         if sibling.is_file() {
             return Ok(sibling);
         }
     }
-    let development = resolve_project_root()?.join("target/debug/otrace");
+    let development = resolve_project_root()?
+        .join("target/debug")
+        .join(executable_name("otrace"));
     development
         .is_file()
         .then_some(development)
@@ -294,6 +298,7 @@ fn resolve_node() -> Result<PathBuf, String> {
     .into_iter()
     .map(PathBuf::from)
     .find(|path| path.is_file())
+    .or_else(|| find_on_path(executable_name("node")))
     .ok_or_else(|| "Node.js is unavailable".into())
 }
 
@@ -303,9 +308,43 @@ fn resolve_project_root() -> Result<PathBuf, String> {
     {
         return Ok(path);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    if let Ok(current) = env::current_exe() {
+        for ancestor in current.ancestors().skip(1) {
+            if has_runtime_packages(ancestor) {
+                return Ok(ancestor.to_path_buf());
+            }
+        }
+    }
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .ok_or_else(|| "cannot resolve the OrcheTrace project root".into())
+        .ok_or_else(|| "cannot resolve the OrcheTrace project root".to_string())?;
+    has_runtime_packages(&development)
+        .then_some(development)
+        .ok_or_else(|| {
+            "OrcheTrace Adapter resources are unavailable; reinstall the complete CLI package"
+                .into()
+        })
+}
+
+fn has_runtime_packages(root: &Path) -> bool {
+    root.join("packages/adapter-runtime/src/index.ts").is_file()
+        && root.join("packages/protocol-ts/src/index.ts").is_file()
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+fn find_on_path(name: String) -> Option<PathBuf> {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|directory| directory.join(&name))
+        .find(|candidate| candidate.is_file())
 }
