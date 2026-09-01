@@ -15,7 +15,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 [![Orchetrace 14-Agent 回放概览](demo/orchetrace-overview.png)](demo/orchetrace-demo.mp4?raw=1)
 
-[▶ 播放或下载 16 秒 MP4 演示](demo/orchetrace-demo.mp4?raw=1)
+[▶ 播放或下载 18 秒 MP4 演示](demo/orchetrace-demo.mp4?raw=1)
 
 ![Orchetrace 14-Agent 回放关键帧](demo/orchetrace-replay-keyframes.gif)
 

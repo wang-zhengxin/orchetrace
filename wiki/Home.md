@@ -125,7 +125,7 @@ npm run dev:web
 
 [![Orchetrace 14-Agent 回放概览](../demo/orchetrace-overview.png)](../demo/orchetrace-demo.mp4?raw=1)
 
-- [播放或下载 16 秒 MP4 演示](../demo/orchetrace-demo.mp4?raw=1)；
+- [播放或下载 18 秒 MP4 演示](../demo/orchetrace-demo.mp4?raw=1)；
 - [查看轻量 GIF 回放](../demo/orchetrace-replay-keyframes.gif)。
 
 两份媒体来自同一次确定性回放，覆盖 Agent 按事件时间出现、多行时间泳道、`1×` 到 `2×` 动态调速、失败节点证据侧栏，以及横向/纵向布局切换。它们展示的是脱敏 fixture，不包含本机真实 Session 内容。
