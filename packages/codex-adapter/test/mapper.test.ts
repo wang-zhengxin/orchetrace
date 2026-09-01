@@ -15,6 +15,16 @@ test("maps a Codex rollout into canonical task, tool, and terminal events", asyn
   assert(result.events.some((event) => event.type === "tool.started" && event.data.call_id === "call-1"));
   assert(result.events.some((event) => event.type === "tool.finished" && event.data.call_id === "call-1"));
   assert(result.events.some((event) => event.type === "agent.outcome_recorded"));
+  assert.deepEqual(
+    result.events.find((event) => event.event_id.endsWith(":usage"))?.data.usage,
+    {
+      input_tokens: 1250,
+      cached_input_tokens: 900,
+      output_tokens: 75,
+      reasoning_output_tokens: 15,
+      total_tokens: 1325,
+    },
+  );
   assert.equal(result.events.filter((event) => event.type === "session.discovered").length, 1);
 });
 

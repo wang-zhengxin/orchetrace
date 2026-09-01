@@ -14,14 +14,16 @@ import { claudeAdapter } from "../../claude-adapter/src/index.ts";
 import { codexAdapter } from "../../codex-adapter/src/index.ts";
 import { deepSeekHarnessAdapter } from "../../dsh-observer/src/index.ts";
 import { piAdapter } from "../../pi-adapter/src/index.ts";
+import { antigravityAdapter } from "../../antigravity-adapter/src/index.ts";
 
 test("built-in adapters derive identity and capabilities from the central registry", () => {
-  const plugins = [claudeAdapter, piAdapter, deepSeekHarnessAdapter, codexAdapter];
+  const plugins = [claudeAdapter, piAdapter, deepSeekHarnessAdapter, codexAdapter, antigravityAdapter];
   assert.deepEqual(plugins.map((plugin) => plugin.runtime), [
     "claude-code",
     "pi",
     "deepseek-harness",
     "codex",
+    "antigravity",
   ]);
   assert(plugins.every((plugin) => plugin.descriptor.capabilities.includes("tools")));
 });

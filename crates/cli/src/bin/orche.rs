@@ -15,7 +15,9 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use orchetrace_core::{AgentSnapshot, RunSnapshot, TimelineEntry, ToolSnapshot};
+use orchetrace_core::{
+    AgentSnapshot, RunSnapshot, TimelineEntry, TokenUsageSnapshot, ToolSnapshot,
+};
 use orchetrace_ingest::{RunCatalog, RunSummary};
 use ratatui::{
     Frame, Terminal,
@@ -44,6 +46,7 @@ const GRID: Color = Color::Rgb(37, 39, 35);
 const BORDER: Color = Color::Rgb(61, 63, 58);
 const TRACK: Color = Color::Rgb(47, 49, 44);
 const FUTURE: Color = Color::Rgb(82, 83, 77);
+const PLAYBACK_SPEEDS: &[f64] = &[0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 
 fn main() {
     if let Err(error) = run() {
@@ -56,6 +59,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse(env::args().skip(1))?;
     if args.help {
         print_help();
+        return Ok(());
+    }
+    if let Some(hooks) = args.hooks {
+        managed::run_runtime_hooks(&hooks.runtime, &hooks.action)?;
         return Ok(());
     }
     let data_dir = args.data_dir.unwrap_or_else(discover_data_dir);
@@ -74,7 +81,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
     let _session = TerminalSession;
-    let _observers = observers;
+    let observers = observers;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
 
@@ -83,7 +90,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let wait = Duration::from_millis(45);
         if event::poll(wait)? {
             match event::read()? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => app.on_key(key)?,
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if let Some(action) = app.on_key(key)? {
+                        app.apply_session_action(action, &observers);
+                    }
+                }
                 Event::Mouse(mouse) => {
                     let size = terminal.size()?;
                     app.on_mouse(mouse, Rect::new(0, 0, size.width, size.height))?;
@@ -117,6 +128,12 @@ struct Args {
     refresh: Duration,
     replay_only: bool,
     help: bool,
+    hooks: Option<HookCommand>,
+}
+
+struct HookCommand {
+    runtime: String,
+    action: String,
 }
 
 impl Args {
@@ -142,6 +159,15 @@ impl Args {
                     parsed.refresh = Duration::from_millis(value.clamp(100, 10_000));
                 }
                 "--replay" | "--no-observe" => parsed.replay_only = true,
+                "hooks" => {
+                    if parsed.hooks.is_some() {
+                        return Err("hooks command may only be provided once".into());
+                    }
+                    parsed.hooks = Some(HookCommand {
+                        runtime: args.next().ok_or("missing hooks runtime")?,
+                        action: args.next().ok_or("missing hooks action")?,
+                    });
+                }
                 "--help" | "-h" => parsed.help = true,
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
@@ -153,9 +179,11 @@ impl Args {
 fn print_help() {
     println!(
         "orche — terminal multi-Agent observer\n\n\
-         Usage: orche [--data-dir PATH] [--run RUN_ID] [--refresh-ms 500] [--replay]\n\n\
+         Usage: orche [--data-dir PATH] [--run RUN_ID] [--refresh-ms 500] [--replay]\n\
+                orche hooks <runtime> <install|status|uninstall>\n\n\
          By default, orche starts the local ingest service and passively observes\n\
-         current Claude, Codex, Pi, and DeepSeek Harness sessions. --replay disables it.\n\n\
+         current Claude, Codex, Pi, DeepSeek Harness, and Antigravity sessions.\n\
+         --replay disables observation. Runtime aliases such as claude and agy are accepted.\n\n\
          Keys:\n\
            q              quit\n\
            ↑/↓ or j/k     select Agent / adjacent session\n\
@@ -163,12 +191,50 @@ fn print_help() {
            Enter/click    open/close Agent detail\n\
            ←/→ or h/l     scrub real timeline\n\
            Home/End       first/latest state\n\
-           Space          play/pause at 1× real time\n\
+           Space          play/pause at selected speed\n\
+           , / .          slower/faster playback\n\
            [ / ]          previous/next session\n\
            f              follow newest live session\n\
            r              reload snapshot\n\
+           e              rename current session\n\
+           d              delete current session\n\
            ?              help overlay"
     );
+}
+
+enum SessionDialog {
+    Rename { value: String },
+    DeleteConfirm,
+}
+
+#[derive(Debug, PartialEq)]
+enum SessionAction {
+    Rename(String),
+    Delete,
+}
+
+type TokenUsageIndex = BTreeMap<String, Vec<(i64, TokenUsageSnapshot)>>;
+
+struct SnapshotLoad {
+    snapshot: RunSnapshot,
+    timeline_complete: bool,
+}
+
+fn empty_snapshot_load() -> SnapshotLoad {
+    SnapshotLoad {
+        snapshot: RunSnapshot {
+            schema_version: orchetrace_protocol::SCHEMA_VERSION,
+            root_session_id: String::new(),
+            runtimes: Vec::new(),
+            event_count: 0,
+            started_at: None,
+            last_activity_at: None,
+            agents: Vec::new(),
+            edges: Vec::new(),
+            timeline: Vec::new(),
+        },
+        timeline_complete: true,
+    }
 }
 
 struct App {
@@ -176,12 +242,17 @@ struct App {
     catalog: RunCatalog,
     run_index: usize,
     snapshot: RunSnapshot,
+    timeline_complete: bool,
+    token_index: TokenUsageIndex,
     selected_id: String,
     cursor_ms: i64,
     playing: bool,
+    playback_speed_index: usize,
     follow_latest: bool,
     detail_open: bool,
+    detail_scroll: u16,
     help_open: bool,
+    session_dialog: Option<SessionDialog>,
     quit: bool,
     refresh: Duration,
     last_refresh: Instant,
@@ -192,6 +263,43 @@ struct App {
 }
 
 impl App {
+    fn has_runs(&self) -> bool {
+        !self.catalog.runs.is_empty()
+    }
+
+    fn enter_empty_state(&mut self, catalog: RunCatalog, notice: impl Into<String>) {
+        self.catalog = catalog;
+        self.run_index = 0;
+        self.install_snapshot(empty_snapshot_load());
+        self.selected_id.clear();
+        self.cursor_ms = 0;
+        self.playing = false;
+        self.follow_latest = true;
+        self.detail_open = false;
+        self.detail_scroll = 0;
+        self.session_dialog = None;
+        self.auto_run = true;
+        self.notice = notice.into();
+    }
+
+    fn install_snapshot(&mut self, loaded: SnapshotLoad) {
+        self.snapshot = loaded.snapshot;
+        self.timeline_complete = loaded.timeline_complete;
+        self.token_index = build_token_index(&self.snapshot.timeline);
+    }
+
+    fn ensure_full_timeline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.timeline_complete || !self.has_runs() {
+            return Ok(());
+        }
+        let run_id = self.summary().run_id.clone();
+        let total = load_full_timeline(&self.data_dir, &run_id, &mut self.snapshot)?;
+        self.timeline_complete = true;
+        self.token_index = build_token_index(&self.snapshot.timeline);
+        self.notice = format!("FULL TIMELINE · {total} EVENTS");
+        Ok(())
+    }
+
     fn load(
         data_dir: PathBuf,
         requested_run: Option<String>,
@@ -199,16 +307,24 @@ impl App {
         observer_status: String,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let catalog = read_catalog(&data_dir)?;
-        if catalog.runs.is_empty() {
-            return Err(format!("{} contains no runs", data_dir.display()).into());
-        }
+        let has_runs = !catalog.runs.is_empty();
         let auto_run = requested_run.is_none();
-        let run_index = requested_run
-            .as_deref()
-            .and_then(|id| catalog.runs.iter().position(|run| run.run_id == id))
-            .or_else(|| most_recent_run_index(&catalog))
-            .unwrap_or(0);
-        let snapshot = read_snapshot(&data_dir, &catalog.runs[run_index].run_id)?;
+        let run_index = if !has_runs {
+            0
+        } else {
+            requested_run
+                .as_deref()
+                .and_then(|id| catalog.runs.iter().position(|run| run.run_id == id))
+                .or_else(|| most_recent_run_index(&catalog))
+                .unwrap_or(0)
+        };
+        let loaded = if !has_runs {
+            empty_snapshot_load()
+        } else {
+            read_snapshot_state(&data_dir, &catalog.runs[run_index].run_id)?
+        };
+        let snapshot = loaded.snapshot;
+        let token_index = build_token_index(&snapshot.timeline);
         let (_, end) = snapshot_bounds(&snapshot);
         let selected_id = snapshot.root_session_id.clone();
         Ok(Self {
@@ -216,17 +332,26 @@ impl App {
             catalog,
             run_index,
             snapshot,
+            timeline_complete: loaded.timeline_complete,
+            token_index,
             selected_id,
             cursor_ms: end,
             playing: false,
+            playback_speed_index: 2,
             follow_latest: true,
             detail_open: false,
+            detail_scroll: 0,
             help_open: false,
+            session_dialog: None,
             quit: false,
             refresh,
             last_refresh: Instant::now(),
             last_tick: Instant::now(),
-            notice: "LIVE FOLLOW".into(),
+            notice: if !has_runs {
+                "WAITING FOR SESSION".into()
+            } else {
+                "LIVE FOLLOW".into()
+            },
             observer_status,
             auto_run,
         })
@@ -237,33 +362,57 @@ impl App {
     }
 
     fn visible_agents(&self) -> Vec<AgentSnapshot> {
-        snapshot_at(&self.snapshot, self.cursor_ms)
+        snapshot_at(&self.snapshot, self.cursor_ms, &self.token_index)
     }
 
-    fn on_key(&mut self, key: KeyEvent) -> Result<(), Box<dyn std::error::Error>> {
+    fn on_key(
+        &mut self,
+        key: KeyEvent,
+    ) -> Result<Option<SessionAction>, Box<dyn std::error::Error>> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
-            return Ok(());
+            return Ok(None);
+        }
+        if self.session_dialog.is_some() {
+            return Ok(self.on_session_dialog_key(key));
         }
         if self.help_open {
             self.help_open = false;
-            return Ok(());
+            return Ok(None);
         }
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Esc if self.detail_open => self.detail_open = false,
+            KeyCode::Esc if self.detail_open => {
+                self.detail_open = false;
+                self.detail_scroll = 0;
+            }
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => self.help_open = true,
-            KeyCode::Enter => self.detail_open = !self.detail_open,
+            KeyCode::Enter => {
+                self.ensure_full_timeline()?;
+                self.detail_open = !self.detail_open;
+                self.detail_scroll = 0;
+            }
             KeyCode::Up | KeyCode::Char('k') => self.select_delta(-1)?,
             KeyCode::Down | KeyCode::Char('j') => self.select_delta(1)?,
             KeyCode::BackTab => self.change_run(-1)?,
             KeyCode::Tab => self.change_run(1)?,
-            KeyCode::Left | KeyCode::Char('h') => self.scrub(-1),
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.ensure_full_timeline()?;
+                self.scrub(-1);
+            }
             KeyCode::Right | KeyCode::Char('l') => self.scrub(1),
-            KeyCode::Home => self.jump(false),
+            KeyCode::Home => {
+                self.ensure_full_timeline()?;
+                self.jump(false);
+            }
             KeyCode::End => self.jump(true),
-            KeyCode::Char(' ') => self.toggle_play(),
+            KeyCode::Char(' ') => {
+                self.ensure_full_timeline()?;
+                self.toggle_play();
+            }
+            KeyCode::Char(',' | '<') => self.change_playback_speed(-1),
+            KeyCode::Char('.' | '>') => self.change_playback_speed(1),
             KeyCode::Char('f') => {
                 if self.auto_run && self.follow_latest {
                     self.auto_run = false;
@@ -273,11 +422,130 @@ impl App {
                 }
             }
             KeyCode::Char('r') => self.reload(true)?,
+            KeyCode::Char('e') => {
+                if !self.has_runs() {
+                    self.notice = "WAITING FOR SESSION".into();
+                    return Ok(None);
+                }
+                self.detail_open = false;
+                self.session_dialog = Some(SessionDialog::Rename {
+                    value: self.summary().label.clone(),
+                });
+            }
+            KeyCode::Char('d') => {
+                if !self.has_runs() {
+                    self.notice = "WAITING FOR SESSION".into();
+                    return Ok(None);
+                }
+                self.detail_open = false;
+                self.session_dialog = Some(SessionDialog::DeleteConfirm);
+            }
             KeyCode::Char('[') => self.change_run(-1)?,
             KeyCode::Char(']') => self.change_run(1)?,
             _ => {}
         }
-        Ok(())
+        Ok(None)
+    }
+
+    fn on_session_dialog_key(&mut self, key: KeyEvent) -> Option<SessionAction> {
+        if key.code == KeyCode::Esc {
+            self.session_dialog = None;
+            self.notice = "SESSION ACTION CANCELLED".into();
+            return None;
+        }
+        match self.session_dialog.as_mut()? {
+            SessionDialog::Rename { value } => match key.code {
+                KeyCode::Enter => {
+                    let label = value.trim().to_owned();
+                    if label.is_empty() {
+                        self.notice = "SESSION NAME CANNOT BE EMPTY".into();
+                        return None;
+                    }
+                    if label.chars().count() > 80 {
+                        self.notice = "SESSION NAME IS LIMITED TO 80 CHARACTERS".into();
+                        return None;
+                    }
+                    self.session_dialog = None;
+                    Some(SessionAction::Rename(label))
+                }
+                KeyCode::Backspace => {
+                    value.pop();
+                    None
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !character.is_control()
+                        && value.chars().count() < 80 =>
+                {
+                    value.push(character);
+                    None
+                }
+                _ => None,
+            },
+            SessionDialog::DeleteConfirm => match key.code {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                    self.session_dialog = None;
+                    Some(SessionAction::Delete)
+                }
+                KeyCode::Char('n' | 'N') => {
+                    self.session_dialog = None;
+                    self.notice = "SESSION DELETE CANCELLED".into();
+                    None
+                }
+                _ => None,
+            },
+        }
+    }
+
+    fn apply_session_action(&mut self, action: SessionAction, observers: &ManagedObservers) {
+        if !self.has_runs() {
+            self.notice = "WAITING FOR SESSION".into();
+            return;
+        }
+        let run = self.summary().clone();
+        match action {
+            SessionAction::Rename(label) => match observers.rename_session(&run, &label) {
+                Ok(()) => match self.reload(true) {
+                    Ok(()) => self.notice = format!("RENAMED · {label}"),
+                    Err(error) => self.notice = format!("RELOAD ERROR · {error}"),
+                },
+                Err(error) => self.notice = format!("RENAME ERROR · {error}"),
+            },
+            SessionAction::Delete => match observers.delete_session(&run) {
+                Ok((deleted_sessions, deleted_events)) => match read_catalog(&self.data_dir) {
+                    Ok(catalog) if catalog.runs.is_empty() => {
+                        self.enter_empty_state(
+                            catalog,
+                            format!(
+                                "DELETED {deleted_sessions} SESSIONS · {deleted_events} EVENTS · WAITING"
+                            ),
+                        );
+                    }
+                    Ok(catalog) => {
+                        self.run_index = self.run_index.min(catalog.runs.len() - 1);
+                        self.catalog = catalog;
+                        match read_snapshot_state(&self.data_dir, &self.summary().run_id) {
+                            Ok(loaded) => {
+                                self.install_snapshot(loaded);
+                                self.cursor_ms = snapshot_bounds(&self.snapshot).1;
+                                self.selected_id.clone_from(&self.snapshot.root_session_id);
+                                self.playing = false;
+                                self.follow_latest = true;
+                                self.detail_open = false;
+                                self.detail_scroll = 0;
+                                self.auto_run = false;
+                                self.notice = format!(
+                                    "DELETED {deleted_sessions} SESSIONS · {deleted_events} EVENTS"
+                                );
+                            }
+                            Err(error) => self.notice = format!("RELOAD ERROR · {error}"),
+                        }
+                    }
+                    Err(error) => self.notice = format!("RELOAD ERROR · {error}"),
+                },
+                Err(error) => self.notice = format!("DELETE ERROR · {error}"),
+            },
+        }
     }
 
     fn on_mouse(
@@ -285,13 +553,36 @@ impl App {
         mouse: MouseEvent,
         area: Rect,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.session_dialog.is_some() {
+            return Ok(());
+        }
+        let Some((_, graph, timeline, _)) = screen_regions(area, self.snapshot.agents.len()) else {
+            return Ok(());
+        };
+        if self.detail_open && contains(detail_area(graph), mouse.column, mouse.row) {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(2);
+                    return Ok(());
+                }
+                MouseEventKind::ScrollDown => {
+                    self.detail_scroll = self
+                        .detail_scroll
+                        .saturating_add(2)
+                        .min(detail_scroll_limit(graph, self));
+                    return Ok(());
+                }
+                MouseEventKind::Down(_) => return Ok(()),
+                _ => {}
+            }
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.select_delta(-1)?;
+                self.select_agent_delta(-1);
                 return Ok(());
             }
             MouseEventKind::ScrollDown => {
-                self.select_delta(1)?;
+                self.select_agent_delta(1);
                 return Ok(());
             }
             MouseEventKind::Down(MouseButton::Left) => {}
@@ -301,41 +592,50 @@ impl App {
             self.help_open = false;
             return Ok(());
         }
-        let Some((_, graph, timeline, _)) = screen_regions(area, self.snapshot.agents.len()) else {
-            return Ok(());
-        };
         let agents = self.visible_agents();
         let inner = graph.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });
         let positions = graph_positions(&agents, inner);
-        if let Some(agent) = agents.iter().find(|agent| {
-            positions
-                .get(&agent.id)
-                .is_some_and(|rect| contains(*rect, mouse.column, mouse.row))
-        }) {
-            self.selected_id.clone_from(&agent.id);
+        if let Some(agent_id) = agents
+            .iter()
+            .find(|agent| {
+                positions
+                    .get(&agent.id)
+                    .is_some_and(|rect| contains(*rect, mouse.column, mouse.row))
+            })
+            .map(|agent| agent.id.clone())
+        {
+            self.ensure_full_timeline()?;
+            self.selected_id = agent_id;
             self.detail_open = true;
+            self.detail_scroll = 0;
             self.auto_run = false;
             return Ok(());
         }
         if contains(timeline, mouse.column, mouse.row) {
+            self.ensure_full_timeline()?;
             self.seek_timeline(mouse.column, mouse.row, timeline);
             return Ok(());
         }
         if self.detail_open && contains(graph, mouse.column, mouse.row) {
             self.detail_open = false;
+            self.detail_scroll = 0;
         }
         Ok(())
     }
 
     fn tick(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.quit {
+            return Ok(());
+        }
         let now = Instant::now();
         if self.playing {
             let elapsed = now.duration_since(self.last_tick).as_millis() as i64;
             let (_, end) = snapshot_bounds(&self.snapshot);
-            self.cursor_ms = (self.cursor_ms + elapsed).min(end);
+            let scaled = scale_playback_elapsed(elapsed, self.playback_speed());
+            self.cursor_ms = (self.cursor_ms + scaled).min(end);
             if self.cursor_ms >= end {
                 self.playing = false;
                 self.follow_latest = true;
@@ -353,6 +653,29 @@ impl App {
 
     fn reload(&mut self, manual: bool) -> Result<(), Box<dyn std::error::Error>> {
         let catalog = read_catalog(&self.data_dir)?;
+        if catalog.runs.is_empty() {
+            if self.has_runs() {
+                self.enter_empty_state(catalog, "NO SESSIONS · WAITING");
+            } else {
+                self.catalog = catalog;
+                if manual {
+                    self.notice = "NO SESSIONS · WAITING".into();
+                }
+            }
+            return Ok(());
+        }
+        if !self.has_runs() {
+            self.run_index = most_recent_run_index(&catalog).unwrap_or(0);
+            self.catalog = catalog;
+            let loaded = read_snapshot_state(&self.data_dir, &self.summary().run_id)?;
+            self.install_snapshot(loaded);
+            self.cursor_ms = snapshot_bounds(&self.snapshot).1;
+            self.selected_id.clone_from(&self.snapshot.root_session_id);
+            self.follow_latest = true;
+            self.auto_run = true;
+            self.notice = format!("LIVE {}", runtime_label(self.summary()));
+            return Ok(());
+        }
         let current_id = self.summary().run_id.clone();
         let next_index = preferred_reload_run_index(
             &self.catalog,
@@ -370,10 +693,16 @@ impl App {
             || summary.last_activity_at != self.snapshot.last_activity_at;
         self.catalog = catalog;
         if changed || manual {
-            self.snapshot = read_snapshot(&self.data_dir, &self.summary().run_id)?;
+            let preserve_full = !run_changed && self.timeline_complete;
+            let loaded = read_snapshot_state(&self.data_dir, &self.summary().run_id)?;
+            self.install_snapshot(loaded);
+            if preserve_full {
+                self.ensure_full_timeline()?;
+            }
             if run_changed {
                 self.selected_id.clone_from(&self.snapshot.root_session_id);
                 self.detail_open = false;
+                self.detail_scroll = 0;
                 self.notice = format!("LIVE {}", runtime_label(self.summary()));
             }
             if self.follow_latest {
@@ -388,14 +717,20 @@ impl App {
     }
 
     fn change_run(&mut self, delta: isize) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.has_runs() {
+            self.notice = "WAITING FOR SESSION".into();
+            return Ok(());
+        }
         let count = self.catalog.runs.len() as isize;
         self.run_index = (self.run_index as isize + delta).rem_euclid(count) as usize;
-        self.snapshot = read_snapshot(&self.data_dir, &self.summary().run_id)?;
+        let loaded = read_snapshot_state(&self.data_dir, &self.summary().run_id)?;
+        self.install_snapshot(loaded);
         self.cursor_ms = snapshot_bounds(&self.snapshot).1;
         self.selected_id.clone_from(&self.snapshot.root_session_id);
         self.playing = false;
         self.follow_latest = true;
         self.detail_open = false;
+        self.detail_scroll = 0;
         self.auto_run = false;
         self.notice = format!("SESSION {}/{}", self.run_index + 1, self.catalog.runs.len());
         Ok(())
@@ -413,6 +748,7 @@ impl App {
         let next = current + delta;
         if (0..agents.len() as isize).contains(&next) {
             self.selected_id.clone_from(&agents[next as usize].id);
+            self.detail_scroll = 0;
             self.auto_run = false;
             self.notice = "SESSION PINNED".into();
             return Ok(());
@@ -425,6 +761,24 @@ impl App {
             self.selected_id.clone_from(&agent.id);
         }
         Ok(())
+    }
+
+    fn select_agent_delta(&mut self, delta: isize) {
+        let agents = self.visible_agents();
+        let Some(current) = agents
+            .iter()
+            .position(|agent| agent.id == self.selected_id)
+            .map(|index| index as isize)
+        else {
+            return;
+        };
+        let next = current + delta;
+        if (0..agents.len() as isize).contains(&next) {
+            self.selected_id.clone_from(&agents[next as usize].id);
+            self.detail_scroll = 0;
+            self.auto_run = false;
+            self.notice = "SESSION PINNED".into();
+        }
     }
 
     fn scrub(&mut self, direction: i64) {
@@ -452,6 +806,10 @@ impl App {
     }
 
     fn toggle_play(&mut self) {
+        if !self.has_runs() {
+            self.notice = "WAITING FOR SESSION".into();
+            return;
+        }
         let (start, end) = snapshot_bounds(&self.snapshot);
         if self.playing {
             self.playing = false;
@@ -465,8 +823,24 @@ impl App {
         self.follow_latest = false;
         self.auto_run = false;
         self.last_tick = Instant::now();
-        self.notice = "PLAY 1×".into();
+        self.notice = format!("PLAY {}", self.playback_speed_label());
         self.ensure_selection_visible();
+    }
+
+    fn playback_speed(&self) -> f64 {
+        PLAYBACK_SPEEDS[self.playback_speed_index]
+    }
+
+    fn playback_speed_label(&self) -> String {
+        format!("{}×", self.playback_speed())
+    }
+
+    fn change_playback_speed(&mut self, delta: isize) {
+        self.playback_speed_index = (self.playback_speed_index as isize + delta)
+            .clamp(0, PLAYBACK_SPEEDS.len() as isize - 1)
+            as usize;
+        self.last_tick = Instant::now();
+        self.notice = format!("SPEED {}", self.playback_speed_label());
     }
 
     fn ensure_selection_visible(&mut self) {
@@ -476,6 +850,7 @@ impl App {
         {
             self.selected_id.clone_from(&agent.id);
             self.detail_open = false;
+            self.detail_scroll = 0;
         }
     }
 
@@ -527,11 +902,18 @@ impl App {
     }
 
     fn follow_newest_run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.has_runs() {
+            self.notice = "WAITING FOR SESSION".into();
+            self.follow_latest = true;
+            self.auto_run = true;
+            return Ok(());
+        }
         if let Some(index) = most_recent_run_index(&self.catalog)
             && index != self.run_index
         {
             self.run_index = index;
-            self.snapshot = read_snapshot(&self.data_dir, &self.summary().run_id)?;
+            let loaded = read_snapshot_state(&self.data_dir, &self.summary().run_id)?;
+            self.install_snapshot(loaded);
             self.selected_id.clone_from(&self.snapshot.root_session_id);
             self.detail_open = false;
         }
@@ -614,11 +996,69 @@ fn read_catalog(data_dir: &Path) -> Result<RunCatalog, Box<dyn std::error::Error
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+#[cfg(test)]
 fn read_snapshot(data_dir: &Path, run_id: &str) -> Result<RunSnapshot, Box<dyn std::error::Error>> {
+    Ok(read_snapshot_state(data_dir, run_id)?.snapshot)
+}
+
+fn read_snapshot_state(
+    data_dir: &Path,
+    run_id: &str,
+) -> Result<SnapshotLoad, Box<dyn std::error::Error>> {
     let file = format!("run-{}.json", encode_file_component(run_id));
     let path = data_dir.join("runs").join(file);
     let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let timeline_complete = value
+        .get("timeline_paging")
+        .and_then(|paging| paging.get("complete"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    Ok(SnapshotLoad {
+        snapshot: serde_json::from_value(value)?,
+        timeline_complete,
+    })
+}
+
+fn load_full_timeline(
+    data_dir: &Path,
+    run_id: &str,
+    snapshot: &mut RunSnapshot,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let file = format!("run-{}.json", encode_file_component(run_id));
+    let path = data_dir.join("runs").join(file);
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let paging = value
+        .get("timeline_paging")
+        .ok_or("snapshot has no timeline paging metadata")?;
+    let page_count = paging
+        .get("page_count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("timeline page count is missing")? as usize;
+    let total_entries = paging
+        .get("total_entries")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("timeline total entries is missing")? as usize;
+    let directory = data_dir
+        .join("timelines")
+        .join(format!("run-{}", encode_file_component(run_id)));
+    let mut timeline = Vec::with_capacity(total_entries);
+    for page in 0..page_count {
+        let page_path = directory.join(format!("page-{page:06}.json"));
+        let bytes =
+            fs::read(&page_path).map_err(|error| format!("{}: {error}", page_path.display()))?;
+        let mut entries: Vec<TimelineEntry> = serde_json::from_slice(&bytes)?;
+        timeline.append(&mut entries);
+    }
+    if timeline.len() != total_entries {
+        return Err(format!(
+            "timeline expected {total_entries} entries, received {}",
+            timeline.len()
+        )
+        .into());
+    }
+    snapshot.timeline = timeline;
+    Ok(total_entries)
 }
 
 fn encode_file_component(value: &str) -> String {
@@ -655,20 +1095,57 @@ fn snapshot_bounds(snapshot: &RunSnapshot) -> (i64, i64) {
     (start, end.max(start + 1))
 }
 
-fn snapshot_at(snapshot: &RunSnapshot, cursor: i64) -> Vec<AgentSnapshot> {
-    snapshot
+fn build_token_index(timeline: &[TimelineEntry]) -> TokenUsageIndex {
+    let mut index = TokenUsageIndex::new();
+    for item in timeline {
+        let (Some(at), Some(usage)) = (parse_ms(Some(&item.at)), item.token_usage.as_ref()) else {
+            continue;
+        };
+        let entries = index.entry(item.session_id.clone()).or_default();
+        let mut cumulative = entries
+            .last()
+            .map(|(_, usage)| usage.clone())
+            .unwrap_or_default();
+        merge_token_usage(&mut cumulative, usage);
+        entries.push((at, cumulative));
+    }
+    index
+}
+
+fn snapshot_at(
+    snapshot: &RunSnapshot,
+    cursor: i64,
+    token_index: &TokenUsageIndex,
+) -> Vec<AgentSnapshot> {
+    let mut agents = snapshot
         .agents
         .iter()
         .filter(|agent| {
             agent.id == snapshot.root_session_id
                 || parse_ms(agent.started_at.as_deref()).is_none_or(|time| time <= cursor)
         })
-        .map(|agent| agent_at(agent, &snapshot.timeline, cursor))
-        .collect()
+        .map(|agent| agent_at(agent, &snapshot.timeline, cursor, token_index))
+        .collect::<Vec<_>>();
+    populate_subtree_usage(&mut agents);
+    agents
 }
 
-fn agent_at(agent: &AgentSnapshot, timeline: &[TimelineEntry], cursor: i64) -> AgentSnapshot {
+fn agent_at(
+    agent: &AgentSnapshot,
+    timeline: &[TimelineEntry],
+    cursor: i64,
+    token_index: &TokenUsageIndex,
+) -> AgentSnapshot {
     let mut view = agent.clone();
+    if parse_ms(agent.last_activity_at.as_deref()).is_some_and(|time| time > cursor) {
+        view.token_usage = token_index
+            .get(&agent.id)
+            .and_then(|entries| {
+                let count = entries.partition_point(|(at, _)| *at <= cursor);
+                count.checked_sub(1).map(|index| entries[index].1.clone())
+            })
+            .unwrap_or_default();
+    }
     view.activations.retain(|activation| {
         parse_ms(Some(&activation.started_at)).is_none_or(|time| time <= cursor)
     });
@@ -725,6 +1202,53 @@ fn agent_at(agent: &AgentSnapshot, timeline: &[TimelineEntry], cursor: i64) -> A
     view
 }
 
+fn populate_subtree_usage(agents: &mut [AgentSnapshot]) {
+    let indexes = agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| (agent.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    for agent in agents.iter_mut() {
+        agent.subtree_token_usage.clone_from(&agent.token_usage);
+    }
+    for child_index in (0..agents.len()).rev() {
+        let Some(parent_index) = agents[child_index]
+            .parent_id
+            .as_ref()
+            .and_then(|id| indexes.get(id))
+            .copied()
+        else {
+            continue;
+        };
+        let usage = agents[child_index].subtree_token_usage.clone();
+        merge_token_usage(&mut agents[parent_index].subtree_token_usage, &usage);
+    }
+}
+
+fn merge_token_usage(total: &mut TokenUsageSnapshot, usage: &TokenUsageSnapshot) {
+    total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+    total.cached_input_tokens = total
+        .cached_input_tokens
+        .saturating_add(usage.cached_input_tokens);
+    total.cache_write_tokens = total
+        .cache_write_tokens
+        .saturating_add(usage.cache_write_tokens);
+    total.reasoning_output_tokens = total
+        .reasoning_output_tokens
+        .saturating_add(usage.reasoning_output_tokens);
+    total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
+    total.reports = total.reports.saturating_add(usage.reports);
+}
+
+fn session_token_usage(agents: &[AgentSnapshot]) -> TokenUsageSnapshot {
+    let mut usage = TokenUsageSnapshot::default();
+    for agent in agents {
+        merge_token_usage(&mut usage, &agent.token_usage);
+    }
+    usage
+}
+
 fn tool_start(tool: &ToolSnapshot, agent: &AgentSnapshot) -> Option<i64> {
     parse_ms(
         tool.started_at
@@ -756,6 +1280,9 @@ fn draw(frame: &mut Frame, app: &App) {
     if app.help_open {
         draw_help(frame, area);
     }
+    if app.session_dialog.is_some() {
+        draw_session_dialog(frame, area, app);
+    }
 }
 
 fn screen_regions(area: Rect, agent_count: usize) -> Option<(Rect, Rect, Rect, Rect)> {
@@ -780,6 +1307,25 @@ fn contains(area: Rect, x: u16, y: u16) -> bool {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+    if !app.has_runs() {
+        let header = Line::from(vec![
+            Span::styled(
+                " orche ",
+                Style::default().fg(Color::Black).bg(ACCENT).bold(),
+            ),
+            Span::styled(" SESSION ", Style::default().fg(MUTED)),
+            Span::styled("—", Style::default().fg(TEXT).bold()),
+            Span::styled(
+                "  0 sessions · waiting for Agent activity",
+                Style::default().fg(MUTED),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM)),
+            area,
+        );
+        return;
+    }
     let summary = app.summary();
     let time = format_clock(app.cursor_ms);
     let header = Line::from(vec![
@@ -809,13 +1355,15 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_graph(frame: &mut Frame, area: Rect, app: &App) {
+    let playback_state = if app.playing {
+        format!("PLAY {}", app.playback_speed_label())
+    } else {
+        app.notice.clone()
+    };
     frame.render_widget(
         Block::default()
             .borders(Borders::BOTTOM)
-            .title(format!(
-                " topology · {} ",
-                if app.playing { "PLAY 1×" } else { &app.notice }
-            ))
+            .title(format!(" topology · {playback_state} "))
             .title_style(Style::default().fg(MUTED))
             .style(Style::default().bg(CANVAS)),
         area,
@@ -851,7 +1399,6 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &App) {
             .map(|item| item.label.as_str())
             .or(agent.role.as_deref())
             .unwrap_or("agent activity");
-        let tool = latest_tool_label(agent);
         let lines = vec![
             Line::from(vec![
                 Span::styled(state_glyph(state), Style::default().fg(color)),
@@ -865,7 +1412,12 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(format!("{state:<7}"), Style::default().fg(color)),
                 Span::styled(
                     truncate(
-                        &format!("{}× {tool}", agent.tool_count),
+                        &format!(
+                            "{} tools · {} / Σ{}",
+                            agent.tool_count,
+                            format_tokens(agent.token_usage.total_tokens),
+                            format_tokens(agent.subtree_token_usage.total_tokens)
+                        ),
                         rect.width.saturating_sub(10) as usize,
                     ),
                     Style::default().fg(if agent.failed_tool_count > 0 {
@@ -944,12 +1496,14 @@ fn latest_agent_event<'a>(
         })
 }
 
-fn latest_tool_label(agent: &AgentSnapshot) -> &str {
-    agent
-        .current_tool
-        .as_deref()
-        .or_else(|| agent.tools.last().map(|tool| tool.name.as_str()))
-        .unwrap_or("tools")
+fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m tok", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k tok", tokens as f64 / 1_000.0)
+    } else {
+        format!("{tokens} tok")
+    }
 }
 
 fn draw_minimap(
@@ -1052,12 +1606,24 @@ fn graph_positions(agents: &[AgentSnapshot], area: Rect) -> BTreeMap<String, Rec
     }
     let depth_count = levels.keys().max().copied().unwrap_or(0) + 1;
     let height_per_level = area.height / depth_count as u16;
-    let card_height = if height_per_level >= 6 { 5 } else { 3 };
+    let card_height: u16 = if height_per_level >= 6 { 5 } else { 3 };
+    let desired_step = card_height.saturating_add(3);
     let row_step = if depth_count <= 1 {
-        1
+        0
     } else {
-        (area.height.saturating_sub(card_height + 1) / (depth_count - 1) as u16).max(1)
+        desired_step.min(
+            area.height
+                .saturating_sub(card_height)
+                .checked_div((depth_count - 1) as u16)
+                .unwrap_or(1)
+                .max(1),
+        )
     };
+    let used_height =
+        card_height.saturating_add(row_step.saturating_mul(depth_count.saturating_sub(1) as u16));
+    let top = area
+        .y
+        .saturating_add(area.height.saturating_sub(used_height) / 2);
     let mut positions = BTreeMap::new();
     for (depth, level) in levels {
         let count = level.len() as u16;
@@ -1070,16 +1636,15 @@ fn graph_positions(agents: &[AgentSnapshot], area: Rect) -> BTreeMap<String, Rec
         };
         for (index, agent) in level.into_iter().enumerate() {
             let x = if depth == 0 {
-                area.x.saturating_add(2)
+                area.x
+                    .saturating_add(area.width.saturating_sub(card_width) / 2)
             } else {
                 let center = area.x + 1 + slot * index as u16 + slot / 2;
                 center
                     .saturating_sub(card_width / 2)
                     .clamp(area.x, area.right().saturating_sub(card_width))
             };
-            let y = area.y
-                + 1
-                + (depth as u16 * row_step).min(area.height.saturating_sub(card_height + 1));
+            let y = top.saturating_add(depth as u16 * row_step);
             positions.insert(agent.id.clone(), Rect::new(x, y, card_width, card_height));
         }
     }
@@ -1183,6 +1748,21 @@ fn put(buffer: &mut Buffer, x: u16, y: u16, symbol: char, style: Style) {
 }
 
 fn draw_timeline(frame: &mut Frame, area: Rect, app: &App) {
+    if !app.has_runs() {
+        frame.render_widget(
+            Paragraph::new("No observed events yet. A new Session will appear automatically.")
+                .style(Style::default().fg(MUTED))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" timeline · waiting ")
+                        .title_style(Style::default().fg(ACCENT))
+                        .style(Style::default().bg(PANEL)),
+                ),
+            area,
+        );
+        return;
+    }
     let (start, end) = snapshot_bounds(&app.snapshot);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1525,14 +2105,15 @@ fn time_x(value: i64, start: i64, end: i64, width: u16) -> u16 {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let session_tokens = session_token_usage(&app.visible_agents()).total_tokens;
     let mode = if app.playing {
-        "Ⅱ pause"
+        format!("Ⅱ pause {}", app.playback_speed_label())
     } else if app.follow_latest && app.auto_run {
-        "● live"
+        "● live".into()
     } else if app.follow_latest {
-        "◆ latest"
+        "◆ latest".into()
     } else {
-        "▶ play"
+        format!("▶ play {}", app.playback_speed_label())
     };
     let line = Line::from(vec![
         Span::styled(
@@ -1547,8 +2128,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             truncate(
                 &format!(
-                    "{} · ↑↓ agent/session · Tab session · ←→ time · f live · q quit",
-                    app.observer_status
+                    "{} · {} session tokens · ↑↓ agent/session · Tab session · ←→ time · e rename · d delete · q quit",
+                    app.observer_status,
+                    format_tokens(session_tokens)
                 ),
                 area.width.saturating_sub(28) as usize,
             ),
@@ -1559,18 +2141,48 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_detail(frame: &mut Frame, graph: Rect, app: &App) {
-    let agents = app.visible_agents();
-    let Some(agent) = agents.iter().find(|agent| agent.id == app.selected_id) else {
+    let Some((agent, lines)) = detail_content(app) else {
         return;
     };
+    let area = detail_area(graph);
+    frame.render_widget(Clear, area);
+    let maximum = detail_scroll_limit_for_lines(area, &lines);
+    let scroll = app.detail_scroll.min(maximum);
+    let scroll_hint = if maximum > 0 {
+        format!(" · ↕ {scroll}/{maximum}")
+    } else {
+        String::new()
+    };
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .scroll((scroll, 0))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT))
+                    .title(format!(" {}{scroll_hint} · esc × ", agent.label))
+                    .style(Style::default().bg(PANEL)),
+            ),
+        area,
+    );
+}
+
+fn detail_area(graph: Rect) -> Rect {
     let width = (graph.width / 2).clamp(38, 70).min(graph.width);
-    let area = Rect::new(
+    Rect::new(
         graph.right().saturating_sub(width),
         graph.y,
         width,
         graph.height,
-    );
-    frame.render_widget(Clear, area);
+    )
+}
+
+fn detail_content(app: &App) -> Option<(AgentSnapshot, Vec<Line<'static>>)> {
+    let agent = app
+        .visible_agents()
+        .into_iter()
+        .find(|agent| agent.id == app.selected_id)?;
     let events = app
         .snapshot
         .timeline
@@ -1580,11 +2192,14 @@ fn draw_detail(frame: &mut Frame, graph: Rect, app: &App) {
                 && parse_ms(Some(&item.at)).is_some_and(|time| time <= app.cursor_ms)
         })
         .collect::<Vec<_>>();
+    let usage = &agent.token_usage;
+    let subtree_usage = &agent.subtree_token_usage;
+    let session_usage = session_token_usage(&app.visible_agents());
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
-                agent_state(agent),
-                Style::default().fg(state_color(agent_state(agent))).bold(),
+                agent_state(&agent),
+                Style::default().fg(state_color(agent_state(&agent))).bold(),
             ),
             Span::styled(
                 format!(
@@ -1599,6 +2214,39 @@ fn draw_detail(frame: &mut Frame, graph: Rect, app: &App) {
             format!("id {}", agent.id),
             Style::default().fg(Color::DarkGray),
         )),
+        Line::from(vec![
+            Span::styled("self     ", Style::default().fg(MUTED)),
+            Span::styled(
+                format_tokens(usage.total_tokens),
+                Style::default().fg(ACCENT).bold(),
+            ),
+            Span::styled(
+                format!(
+                    " · in {} · out {} · cached {} · write {}",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cached_input_tokens,
+                    usage.cache_write_tokens
+                ),
+                Style::default().fg(MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("subtree  ", Style::default().fg(MUTED)),
+            Span::styled(
+                format_tokens(subtree_usage.total_tokens),
+                Style::default().fg(GREEN).bold(),
+            ),
+            Span::styled(" · inclusive descendants", Style::default().fg(MUTED)),
+        ]),
+        Line::from(vec![
+            Span::styled("session  ", Style::default().fg(MUTED)),
+            Span::styled(
+                format_tokens(session_usage.total_tokens),
+                Style::default().fg(ACCENT).bold(),
+            ),
+            Span::styled(" · all Agent self usage", Style::default().fg(MUTED)),
+        ]),
         Line::from(""),
         Line::from(Span::styled("triggered by", Style::default().fg(MUTED))),
     ];
@@ -1626,22 +2274,27 @@ fn draw_detail(frame: &mut Frame, graph: Rect, app: &App) {
     lines.push(Line::from(Span::styled(
         agent
             .outcome_evidence
-            .as_deref()
-            .unwrap_or("No terminal outcome was recorded at this time."),
+            .clone()
+            .unwrap_or_else(|| "No terminal outcome was recorded at this time.".into()),
         Style::default().fg(Color::Gray),
     )));
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(ACCENT))
-                    .title(format!(" {} · esc × ", agent.label))
-                    .style(Style::default().bg(PANEL)),
-            ),
-        area,
-    );
+    Some((agent, lines))
+}
+
+fn detail_scroll_limit(graph: Rect, app: &App) -> u16 {
+    detail_content(app)
+        .map(|(_, lines)| detail_scroll_limit_for_lines(detail_area(graph), &lines))
+        .unwrap_or_default()
+}
+
+fn detail_scroll_limit_for_lines(area: Rect, lines: &[Line<'_>]) -> u16 {
+    let width = area.width.saturating_sub(2).max(1) as usize;
+    let visible = area.height.saturating_sub(2) as usize;
+    let rendered = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum::<usize>();
+    rendered.saturating_sub(visible).min(u16::MAX as usize) as u16
 }
 
 fn detail_line(item: &TimelineEntry) -> Line<'static> {
@@ -1660,7 +2313,7 @@ fn detail_line(item: &TimelineEntry) -> Line<'static> {
 
 fn draw_help(frame: &mut Frame, area: Rect) {
     let width = 58.min(area.width.saturating_sub(4));
-    let height = 17.min(area.height.saturating_sub(2));
+    let height = 22.min(area.height.saturating_sub(2));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -1670,7 +2323,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(
-            "Click select Agent and open detail\nClick timeline to seek real time\n↑/↓  select Agent / adjacent session\nTab   next session (Shift+Tab previous)\nEnter open/close detail\n←/→  move real-time cursor\nHome/End first/latest state\nSpace play/pause at 1×\n[ / ] previous/next session\nf     follow newest live session\nr     reload from disk\nq     quit\n\nPress any key to close",
+            "Click select Agent and open detail\nWheel over detail to scroll its content\nClick timeline to seek real time\n↑/↓  select Agent / adjacent session\nTab   next session (Shift+Tab previous)\nEnter open/close detail\n←/→  move real-time cursor\nHome/End first/latest state\nSpace play/pause at selected speed\n, / . slower/faster playback\n[ / ] previous/next session\nf     follow newest live session\nr     reload from disk\ne     rename current session\nd     delete current session\nq     quit\n\nPress any key to close",
         )
         .style(Style::default().fg(TEXT))
         .block(
@@ -1678,6 +2331,81 @@ fn draw_help(frame: &mut Frame, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ACCENT))
                 .title(" orche help ")
+                .style(Style::default().bg(PANEL)),
+        ),
+        popup,
+    );
+}
+
+fn draw_session_dialog(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(dialog) = app.session_dialog.as_ref() else {
+        return;
+    };
+    let width = 70.min(area.width.saturating_sub(4)).max(36);
+    let height = match dialog {
+        SessionDialog::Rename { .. } => 8,
+        SessionDialog::DeleteConfirm => 9,
+    }
+    .min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let (title, border, body) = match dialog {
+        SessionDialog::Rename { value } => (
+            " rename session ",
+            ACCENT,
+            Text::from(vec![
+                Line::from(Span::styled(
+                    format!("ID  {}", app.summary().root_session_id),
+                    Style::default().fg(MUTED),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("name  ", Style::default().fg(ACCENT)),
+                    Span::styled(value, Style::default().fg(TEXT).bold()),
+                    Span::styled("▌", Style::default().fg(ACCENT)),
+                ]),
+                Line::from(Span::styled(
+                    "Enter save · Esc cancel · ID and runtime data stay unchanged",
+                    Style::default().fg(MUTED),
+                )),
+            ]),
+        ),
+        SessionDialog::DeleteConfirm => (
+            " delete session ",
+            RED,
+            Text::from(vec![
+                Line::from(Span::styled(
+                    app.summary().label.clone(),
+                    Style::default().fg(TEXT).bold(),
+                )),
+                Line::from(Span::styled(
+                    format!("ID  {}", app.summary().root_session_id),
+                    Style::default().fg(MUTED),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!(
+                        "Delete {} Agents and {} canonical events?",
+                        app.summary().agent_count,
+                        app.summary().event_count
+                    ),
+                    Style::default().fg(RED),
+                )),
+                Line::from("Y / Enter confirm · N / Esc cancel"),
+            ]),
+        ),
+    };
+    frame.render_widget(
+        Paragraph::new(body).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border))
+                .title(title)
                 .style(Style::default().bg(PANEL)),
         ),
         popup,
@@ -1824,6 +2552,10 @@ fn format_elapsed(start: i64, value: i64) -> String {
     }
 }
 
+fn scale_playback_elapsed(elapsed_ms: i64, speed: f64) -> i64 {
+    (elapsed_ms as f64 * speed) as i64
+}
+
 fn format_axis_time(value: i64, span: i64) -> String {
     DateTime::from_timestamp_millis(value)
         .map(|time| {
@@ -1852,6 +2584,14 @@ fn truncate(value: &str, width: usize) -> String {
 mod tests {
     use super::*;
 
+    fn temporary_data_dir(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("orche-{name}-{}-{unique}", std::process::id()))
+    }
+
     fn summary(run_id: &str, last_activity_at: &str, event_count: usize) -> RunSummary {
         RunSummary {
             run_id: run_id.into(),
@@ -1870,6 +2610,39 @@ mod tests {
     }
 
     #[test]
+    fn empty_catalog_stays_open_and_waits_for_a_new_session() {
+        let data_dir = temporary_data_dir("empty-catalog");
+        fs::create_dir_all(&data_dir).unwrap();
+        let catalog = RunCatalog {
+            schema_version: 1,
+            pending_event_count: 0,
+            runs: Vec::new(),
+        };
+        fs::write(
+            data_dir.join("run-catalog.json"),
+            serde_json::to_vec(&catalog).unwrap(),
+        )
+        .unwrap();
+
+        let mut app = App::load(
+            data_dir.clone(),
+            None,
+            Duration::from_millis(10),
+            "TEST".into(),
+        )
+        .unwrap();
+
+        assert!(!app.has_runs());
+        assert!(!app.quit);
+        assert_eq!(app.notice, "WAITING FOR SESSION");
+        assert!(app.snapshot.agents.is_empty());
+        app.reload(false).unwrap();
+        assert!(!app.quit);
+
+        fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
     fn arguments_accept_terminal_data_source() {
         let args = Args::parse([
             "--data-dir".into(),
@@ -1880,6 +2653,14 @@ mod tests {
         .unwrap();
         assert_eq!(args.data_dir, Some(PathBuf::from("/tmp/orche")));
         assert_eq!(args.refresh, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn arguments_accept_runtime_hook_management() {
+        let args = Args::parse(["hooks".into(), "agy".into(), "status".into()]).unwrap();
+        let hooks = args.hooks.unwrap();
+        assert_eq!(hooks.runtime, "agy");
+        assert_eq!(hooks.action, "status");
     }
 
     #[test]
@@ -1900,6 +2681,112 @@ mod tests {
     }
 
     #[test]
+    fn playback_speed_scales_real_elapsed_time() {
+        assert_eq!(scale_playback_elapsed(1_000, 0.25), 250);
+        assert_eq!(scale_playback_elapsed(1_000, 1.0), 1_000);
+        assert_eq!(scale_playback_elapsed(1_000, 8.0), 8_000);
+    }
+
+    #[test]
+    fn token_prefix_index_returns_usage_at_the_historical_cursor() {
+        let timeline = vec![
+            TimelineEntry {
+                session_id: "agent".into(),
+                at: "2026-08-31T00:00:01Z".into(),
+                kind: "usage".into(),
+                label: "first".into(),
+                outcome: None,
+                token_usage: Some(TokenUsageSnapshot {
+                    input_tokens: 10,
+                    total_tokens: 10,
+                    reports: 1,
+                    ..TokenUsageSnapshot::default()
+                }),
+            },
+            TimelineEntry {
+                session_id: "agent".into(),
+                at: "2026-08-31T00:00:03Z".into(),
+                kind: "usage".into(),
+                label: "second".into(),
+                outcome: None,
+                token_usage: Some(TokenUsageSnapshot {
+                    output_tokens: 5,
+                    total_tokens: 5,
+                    reports: 1,
+                    ..TokenUsageSnapshot::default()
+                }),
+            },
+        ];
+        let index = build_token_index(&timeline);
+        let entries = &index["agent"];
+        let cursor = parse_ms(Some("2026-08-31T00:00:02Z")).unwrap();
+        let count = entries.partition_point(|(at, _)| *at <= cursor);
+
+        assert_eq!(entries[count - 1].1.total_tokens, 10);
+        assert_eq!(entries.last().unwrap().1.total_tokens, 15);
+        assert_eq!(entries.last().unwrap().1.reports, 2);
+    }
+
+    #[test]
+    fn paged_timeline_is_loaded_only_when_full_history_is_requested() {
+        let fixture_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
+        let run_id = "deepseek-harness:10:local-demo:8:run-root";
+        let source = read_snapshot(&fixture_dir, run_id).unwrap();
+        let expected = source.timeline.clone();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir =
+            std::env::temp_dir().join(format!("orche-timeline-{}-{nonce}", std::process::id()));
+        let page_dir = data_dir
+            .join("timelines")
+            .join(format!("run-{}", encode_file_component(run_id)));
+        fs::create_dir_all(data_dir.join("runs")).unwrap();
+        fs::create_dir_all(&page_dir).unwrap();
+
+        let midpoint = expected.len() / 2;
+        let mut value = serde_json::to_value(&source).unwrap();
+        value["timeline"] = serde_json::to_value(&expected[..1]).unwrap();
+        value["timeline_paging"] = serde_json::json!({
+            "total_entries": expected.len(),
+            "page_size": midpoint,
+            "page_count": 2,
+            "complete": false
+        });
+        fs::write(
+            data_dir
+                .join("runs")
+                .join(format!("run-{}.json", encode_file_component(run_id))),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            page_dir.join("page-000000.json"),
+            serde_json::to_vec(&expected[..midpoint]).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            page_dir.join("page-000001.json"),
+            serde_json::to_vec(&expected[midpoint..]).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_snapshot_state(&data_dir, run_id).unwrap();
+        assert!(!loaded.timeline_complete);
+        assert_eq!(loaded.snapshot.timeline.len(), 1);
+        let mut snapshot = loaded.snapshot;
+        assert_eq!(
+            load_full_timeline(&data_dir, run_id, &mut snapshot).unwrap(),
+            expected.len()
+        );
+        assert_eq!(snapshot.timeline, expected);
+
+        fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
     fn hierarchical_layout_keeps_each_parent_family_together() {
         let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
         let snapshot =
@@ -1915,6 +2802,21 @@ mod tests {
         assert!(x("agent-motion") < x("agent-accessibility"));
         assert!(x("agent-accessibility") < x("agent-performance"));
         assert!(x("agent-performance") < x("agent-tests"));
+        let root = positions.get(&snapshot.root_session_id).unwrap();
+        assert_eq!(root.x + root.width / 2, 70);
+    }
+
+    #[test]
+    fn a_single_agent_is_centered_in_the_topology_canvas() {
+        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
+        let snapshot =
+            read_snapshot(&data_dir, "deepseek-harness:10:local-demo:8:run-root").unwrap();
+        let area = Rect::new(10, 4, 100, 30);
+        let positions = graph_positions(&snapshot.agents[..1], area);
+        let node = positions.values().next().unwrap();
+
+        assert_eq!(node.x + node.width / 2, area.x + area.width / 2);
+        assert!((node.y + node.height / 2).abs_diff(area.y + area.height / 2) <= 1);
     }
 
     #[test]
@@ -1961,5 +2863,90 @@ mod tests {
         app.select_delta(1).unwrap();
         assert_ne!(app.summary().run_id, first_run);
         assert!(!app.auto_run);
+    }
+
+    #[test]
+    fn mouse_wheel_navigation_never_crosses_a_session_boundary() {
+        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
+        let first_run = "deepseek-harness:10:local-demo:9:run-smoke";
+        let mut app = App::load(
+            data_dir,
+            Some(first_run.into()),
+            Duration::from_secs(1),
+            "TEST".into(),
+        )
+        .unwrap();
+
+        assert_eq!(app.snapshot.agents.len(), 1);
+        app.select_agent_delta(1);
+        assert_eq!(app.summary().run_id, first_run);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_detail_without_changing_the_selected_agent() {
+        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
+        let mut app = App::load(
+            data_dir,
+            Some("deepseek-harness:10:local-demo:8:run-root".into()),
+            Duration::from_secs(1),
+            "TEST".into(),
+        )
+        .unwrap();
+        app.selected_id = "run-root".into();
+        app.detail_open = true;
+        let screen = Rect::new(0, 0, 80, 20);
+        let (_, graph, _, _) = screen_regions(screen, app.snapshot.agents.len()).unwrap();
+        let detail = detail_area(graph);
+        assert!(detail_scroll_limit(graph, &app) > 0);
+
+        app.on_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: detail.x + 1,
+                row: detail.y + 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            screen,
+        )
+        .unwrap();
+
+        assert_eq!(app.selected_id, "run-root");
+        assert_eq!(app.detail_scroll, 2);
+    }
+
+    #[test]
+    fn session_management_requires_explicit_dialog_confirmation() {
+        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/web/public/data");
+        let mut app = App::load(
+            data_dir,
+            Some("deepseek-harness:10:local-demo:9:run-smoke".into()),
+            Duration::from_secs(1),
+            "TEST".into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+                .unwrap(),
+            None
+        );
+        assert!(matches!(
+            app.session_dialog,
+            Some(SessionDialog::DeleteConfirm)
+        ));
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+                .unwrap(),
+            None
+        );
+        assert!(app.session_dialog.is_none());
+
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+                .unwrap(),
+            Some(SessionAction::Delete)
+        );
     }
 }

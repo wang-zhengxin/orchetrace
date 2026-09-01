@@ -35,10 +35,44 @@ pub struct AgentSnapshot {
     pub current_tool: Option<String>,
     pub tool_count: usize,
     pub failed_tool_count: usize,
+    #[serde(default)]
+    pub token_usage: TokenUsageSnapshot,
+    /// Inclusive usage for this Agent and all visible descendants.
+    #[serde(default)]
+    pub subtree_token_usage: TokenUsageSnapshot,
     pub started_at: Option<String>,
     pub last_activity_at: Option<String>,
     pub activations: Vec<ActivationSnapshot>,
     pub tools: Vec<ToolSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageSnapshot {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    pub reports: u64,
+}
+
+impl TokenUsageSnapshot {
+    fn add_assign(&mut self, usage: &Self) {
+        self.input_tokens = self.input_tokens.saturating_add(usage.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(usage.cached_input_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(usage.cache_write_tokens);
+        self.reasoning_output_tokens = self
+            .reasoning_output_tokens
+            .saturating_add(usage.reasoning_output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(usage.total_tokens);
+        self.reports = self.reports.saturating_add(usage.reports);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -96,6 +130,8 @@ pub struct TimelineEntry {
     pub kind: String,
     pub label: String,
     pub outcome: Option<TerminalOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsageSnapshot>,
 }
 
 #[derive(Debug)]
@@ -147,6 +183,7 @@ struct AgentAccumulator {
     last_activity_at: Option<String>,
     activations: BTreeMap<String, ActivationSnapshot>,
     tools: BTreeMap<String, ToolSnapshot>,
+    token_usage: TokenUsageSnapshot,
 }
 
 impl AgentAccumulator {
@@ -188,6 +225,8 @@ impl AgentAccumulator {
             current_tool,
             tool_count: tools.len(),
             failed_tool_count,
+            subtree_token_usage: self.token_usage.clone(),
+            token_usage: self.token_usage,
             started_at: self.started_at,
             last_activity_at: self.last_activity_at,
             activations: self.activations.into_values().collect(),
@@ -276,6 +315,7 @@ pub fn fold_events(
             agent.id.clone(),
         )
     });
+    populate_subtree_token_usage(&mut snapshots);
 
     let mut edges: Vec<_> = snapshots
         .iter()
@@ -308,12 +348,39 @@ pub fn fold_events(
     })
 }
 
+fn populate_subtree_token_usage(agents: &mut [AgentSnapshot]) {
+    let indexes: BTreeMap<_, _> = agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| (agent.id.clone(), index))
+        .collect();
+    for agent in agents.iter_mut() {
+        agent.subtree_token_usage.clone_from(&agent.token_usage);
+    }
+    for child_index in (0..agents.len()).rev() {
+        let Some(parent_index) = agents[child_index]
+            .parent_id
+            .as_ref()
+            .and_then(|parent_id| indexes.get(parent_id))
+            .copied()
+        else {
+            continue;
+        };
+        let child_usage = agents[child_index].subtree_token_usage.clone();
+        agents[parent_index]
+            .subtree_token_usage
+            .add_assign(&child_usage);
+    }
+}
+
 fn apply_event(
     agent: &mut AgentAccumulator,
     event: &CanonicalEvent,
     timeline: &mut Vec<TimelineEntry>,
 ) -> Result<(), FoldError> {
     let at = event.effective_time();
+    let usage = token_usage(&event.data);
+    agent.token_usage.add_assign(&usage);
     match event.event_type {
         EventType::SessionDiscovered | EventType::SessionMetadataChanged => {
             apply_identity(agent, &event.data);
@@ -394,7 +461,11 @@ fn apply_event(
         }
         EventType::TurnStarted => push_timeline(timeline, event, "turn", "turn started", None),
         EventType::TurnEnded => push_timeline(timeline, event, "turn", "turn ended", None),
-        EventType::StepStarted | EventType::StepEnded => {}
+        EventType::StepStarted | EventType::StepEnded => {
+            if usage.reports > 0 {
+                push_timeline(timeline, event, "usage", "token usage", None);
+            }
+        }
         EventType::AssistantMessage => {
             let label =
                 data_string(&event.data, "summary").unwrap_or_else(|| "assistant response".into());
@@ -513,7 +584,57 @@ fn push_timeline(
         kind: kind.to_owned(),
         label: label.to_owned(),
         outcome,
+        token_usage: (token_usage(&event.data).reports > 0).then(|| token_usage(&event.data)),
     });
+}
+
+fn token_usage(data: &Value) -> TokenUsageSnapshot {
+    let Some(usage) = data.get("usage").and_then(Value::as_object) else {
+        return TokenUsageSnapshot::default();
+    };
+    let number = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| usage.get(*key).and_then(Value::as_u64))
+            .unwrap_or_default()
+    };
+    let input_tokens = number(&["input_tokens", "inputTokens", "input"]);
+    let output_tokens = number(&["output_tokens", "outputTokens", "output"]);
+    let cached_input_tokens = number(&[
+        "cached_input_tokens",
+        "cache_read_input_tokens",
+        "cacheReadTokens",
+        "cacheRead",
+    ]);
+    let cache_write_tokens = number(&[
+        "cache_creation_input_tokens",
+        "cache_write_input_tokens",
+        "cacheWriteTokens",
+        "cacheWrite",
+    ]);
+    let reasoning_output_tokens = number(&["reasoning_output_tokens", "reasoningOutputTokens"]);
+    let explicit_total = number(&["total_tokens", "totalTokens", "total"]);
+    let has_report = input_tokens > 0
+        || output_tokens > 0
+        || cached_input_tokens > 0
+        || cache_write_tokens > 0
+        || reasoning_output_tokens > 0
+        || explicit_total > 0;
+    TokenUsageSnapshot {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_tokens,
+        reasoning_output_tokens,
+        total_tokens: if explicit_total > 0 {
+            explicit_total
+        } else {
+            input_tokens
+                .saturating_add(output_tokens)
+                .saturating_add(cached_input_tokens)
+                .saturating_add(cache_write_tokens)
+        },
+        reports: u64::from(has_report),
+    }
 }
 
 fn required_string(event: &CanonicalEvent, key: &str) -> Result<String, FoldError> {
@@ -816,12 +937,117 @@ mod tests {
         assert_eq!(agent.outcome, None);
         assert_eq!(agent.tool_count, 1);
         assert_eq!(agent.failed_tool_count, 0);
+        assert_eq!(agent.token_usage.input_tokens, 180);
+        assert_eq!(agent.token_usage.output_tokens, 28);
+        assert_eq!(agent.token_usage.total_tokens, 208);
+        assert_eq!(agent.token_usage.reports, 2);
         assert!(
             snapshot
                 .timeline
                 .iter()
                 .any(|entry| entry.kind == "compaction")
         );
+    }
+
+    #[test]
+    fn token_usage_normalizes_provider_fields_and_disjoint_cache_tokens() {
+        let snapshot = fold_events(vec![
+            event(
+                "root",
+                "root",
+                None,
+                0,
+                "2026-08-25T00:00:00Z",
+                EventType::SessionDiscovered,
+                json!({"label":"root"}),
+            ),
+            event(
+                "usage",
+                "root",
+                None,
+                1,
+                "2026-08-25T00:00:01Z",
+                EventType::AssistantMessage,
+                json!({
+                    "summary": "done",
+                    "usage": {
+                        "input_tokens": 1_000,
+                        "output_tokens": 50,
+                        "cache_read_input_tokens": 800,
+                        "cache_creation_input_tokens": 25
+                    }
+                }),
+            ),
+        ])
+        .unwrap();
+        let usage = &snapshot.agents[0].token_usage;
+        assert_eq!(usage.input_tokens, 1_000);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cached_input_tokens, 800);
+        assert_eq!(usage.cache_write_tokens, 25);
+        assert_eq!(usage.total_tokens, 1_875);
+        assert_eq!(snapshot.timeline[0].token_usage.as_ref(), Some(usage));
+    }
+
+    #[test]
+    fn subtree_token_usage_is_inclusive_without_double_counting_self_usage() {
+        let mut events = Vec::new();
+        for (id, parent, seq, tokens) in [
+            ("root", None, 0, 10),
+            ("child", Some("root"), 2, 20),
+            ("grandchild", Some("child"), 4, 30),
+        ] {
+            events.push(event(
+                &format!("{id}-discovered"),
+                id,
+                parent,
+                seq,
+                &format!("2026-08-25T00:00:0{seq}Z"),
+                EventType::SessionDiscovered,
+                json!({"label": id}),
+            ));
+            events.push(event(
+                &format!("{id}-usage"),
+                id,
+                parent,
+                seq + 1,
+                &format!("2026-08-25T00:00:0{}Z", seq + 1),
+                EventType::AssistantMessage,
+                json!({"usage": {"input_tokens": tokens}}),
+            ));
+        }
+        let snapshot = fold_events(events).unwrap();
+        let agents = snapshot
+            .agents
+            .iter()
+            .map(|agent| (agent.id.as_str(), agent))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(agents["root"].token_usage.total_tokens, 10);
+        assert_eq!(agents["root"].subtree_token_usage.total_tokens, 60);
+        assert_eq!(agents["child"].token_usage.total_tokens, 20);
+        assert_eq!(agents["child"].subtree_token_usage.total_tokens, 50);
+        assert_eq!(agents["grandchild"].subtree_token_usage.total_tokens, 30);
+    }
+
+    #[test]
+    fn codex_token_count_fixture_is_attributed_to_its_agent() {
+        let events = include_str!("../../../fixtures/codex/canonical-events.jsonl")
+            .lines()
+            .map(serde_json::from_str::<CanonicalEvent>)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let snapshot = fold_events(events).unwrap();
+        let root = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.id == "codex-root")
+            .unwrap();
+        assert_eq!(root.token_usage.input_tokens, 1_250);
+        assert_eq!(root.token_usage.output_tokens, 75);
+        assert_eq!(root.token_usage.cached_input_tokens, 900);
+        assert_eq!(root.token_usage.reasoning_output_tokens, 15);
+        assert_eq!(root.token_usage.total_tokens, 1_325);
     }
 
     #[test]

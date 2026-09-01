@@ -69,6 +69,23 @@
         "directory_flag": "--sessions-dir",
         "state_directory": "codex-auto"
       }
+    },
+    {
+      "id": "antigravity",
+      "label": "Google Antigravity",
+      "short_label": "AGY",
+      "accent": "#a78bfa",
+      "aliases": ["agy", "google-antigravity"],
+      "session_directory": "~/.gemini/antigravity-cli/brain",
+      "capabilities": ["passive", "stream", "subagents", "tools", "usage", "hooks"],
+      "observer": {
+        "package": "antigravity-adapter",
+        "entrypoint": "src/auto-cli.ts",
+        "script_env": "ORCHETRACE_ANTIGRAVITY_AUTO_SCRIPT",
+        "sessions_env": "ORCHETRACE_ANTIGRAVITY_SESSIONS_DIR",
+        "directory_flag": "--sessions-dir",
+        "state_directory": "antigravity-auto"
+      }
     }
   ]
 }

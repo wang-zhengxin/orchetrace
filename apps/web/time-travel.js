@@ -41,6 +41,7 @@ export function snapshotAtTime(snapshot, requestedCursor) {
       return agent.id === snapshot.root_session_id || !Number.isFinite(started) || started <= cursor;
     })
     .map((agent) => agentAtTime(agent, eventsByAgent.get(agent.id) ?? [], cursor, bounds.end));
+  populateSubtreeTokenUsage(agents);
   const visible = new Set(agents.map((agent) => agent.id));
 
   return {
@@ -53,6 +54,17 @@ export function snapshotAtTime(snapshot, requestedCursor) {
     ),
     timeline,
   };
+}
+
+export function populateSubtreeTokenUsage(agents) {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]));
+  for (const agent of agents) agent.subtree_token_usage = { ...emptyTokenUsage(), ...agent.token_usage };
+  for (let index = agents.length - 1; index >= 0; index -= 1) {
+    const agent = agents[index];
+    const parent = agent.parent_id ? byId.get(agent.parent_id) : null;
+    if (parent) parent.subtree_token_usage = mergeTokenUsage(parent.subtree_token_usage, agent.subtree_token_usage);
+  }
+  return agents;
 }
 
 export function agentEventsAtTime(snapshot, agentId, requestedCursor) {
@@ -98,6 +110,9 @@ function agentAtTime(agent, events, cursor, runEnd) {
   const activeActivation = [...activations].reverse().find((activation) => !activation.ended_at);
   const outcomeEvent = [...events].reverse().find((item) => TERMINAL_KINDS.has(item.kind));
   const settled = cursor >= runEnd || at(agent.last_activity_at) <= cursor;
+  const tokenUsage = settled
+    ? agent.token_usage ?? emptyTokenUsage()
+    : events.reduce((total, item) => mergeTokenUsage(total, item.token_usage), emptyTokenUsage());
   const lastActivation = activations.at(-1);
   let status = "unknown";
 
@@ -123,12 +138,33 @@ function agentAtTime(agent, events, cursor, runEnd) {
     current_tool: activeTool?.name ?? null,
     tool_count: tools.length,
     failed_tool_count: tools.filter((tool) => tool.outcome === "failed").length,
+    token_usage: tokenUsage,
     last_activity_at: Number.isFinite(lastActivity)
       ? new Date(activeTool || activeActivation ? cursor : Math.min(lastActivity, cursor)).toISOString()
       : agent.started_at,
     activations,
     tools,
   };
+}
+
+function emptyTokenUsage() {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_input_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_output_tokens: 0,
+    total_tokens: 0,
+    reports: 0,
+  };
+}
+
+function mergeTokenUsage(total, usage) {
+  if (!usage) return total;
+  for (const key of Object.keys(total)) {
+    total[key] += Number(usage[key]) || 0;
+  }
+  return total;
 }
 
 function closestTool(tools, name, eventTime) {

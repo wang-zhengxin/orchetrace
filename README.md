@@ -3,23 +3,27 @@
 [![CI](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml/badge.svg)](https://github.com/wang-zhengxin/orchetrace/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 Claude Code、Codex、Pi 和 DeepSeek Harness 的会话、父子 Agent 拓扑、工具调用、状态证据与执行时间线。
+Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 Claude Code、Codex、Pi、DeepSeek Harness 和 Google Antigravity（`agy`）的会话、父子 Agent 拓扑、工具调用、状态证据与执行时间线。
 
 它不是 Agent 编排器，也不替代各运行时自己的交互界面。Orchetrace 只观察运行时已经产生的事实，并将它们转换为一致、可回放的诊断视图。
 
-> 当前状态：`0.1.0-beta candidate`。核心链路、数据治理和四运行时 Adapter 已可运行；跨平台安装包流水线已经建立，正式签名、notarization、升级与回滚验证仍在加固中。
+> 当前状态：`0.1.0-beta candidate`。核心链路、数据治理和五运行时 Adapter 已可运行；跨平台安装包流水线已经建立，正式签名、notarization、升级与回滚验证仍在加固中。
 
 完整使用、运维、扩展与故障排查说明见 [Orchetrace Wiki](wiki/Home.md)。
 
-## 终端回放演示
+## 交互回放演示
 
-![OrcheTrace 14-Agent 终端回放关键帧](demo/orchetrace-tui-14-agents-keyframes.gif)
+[![Orchetrace 14-Agent 回放概览](demo/orchetrace-overview.png)](demo/orchetrace-demo.mp4?raw=1)
 
-动画取自 14-Agent 实际 TUI 回放的 8 个关键帧：节点按真实时间逐步出现，拓扑缩略图与多行时间泳道同步更新，并展示根 Agent 详情、完整拓扑、失败节点证据及节点侧栏详情。
+[▶ 播放或下载 16 秒 MP4 演示](demo/orchetrace-demo.mp4?raw=1)
+
+![Orchetrace 14-Agent 回放关键帧](demo/orchetrace-replay-keyframes.gif)
+
+演示基于同一份 14-Agent 脱敏事件流录制：Agent 按真实事件时间逐步出现，多行时间泳道、拓扑连线和右上角缩略图同步推进；播放中从 `1×` 切换到 `2×`，随后打开失败节点的完整证据侧栏，并演示横向、纵向布局切换。Web、Tauri 与终端 TUI 使用同一份快照和时间语义。
 
 ## 核心能力
 
-- Claude Code、Codex、Pi、DeepSeek Harness 统一接入，并允许未知 Runtime 以注册描述符扩展；
+- Claude Code、Codex、Pi、DeepSeek Harness、Google Antigravity 统一接入，并允许未知 Runtime 以注册描述符扩展；
 - 根 Agent、子 Agent 和嵌套子 Agent 拓扑；
 - Replay 与 Live 两种观察模式；
 - Agent 状态、activation、工具调用、错误和终态证据；
@@ -27,8 +31,8 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - Rust 确定性 fold、SQLite 事实存储、checkpoint 快速恢复、增量快照和 delta；
 - 超过 1,000 条的 timeline 自动分页，首屏读取真实时间概览，历史回放与详情按需补齐；
 - WebSocket 实时通知，断开后自动降级为轮询；
-- Tauri 桌面壳、受管 `otrace` sidecar、四运行时自动发现和结构化诊断抽屉；
-- Adapter 健康度聚合、可定位的 severity/code/location 失败证据，以及四运行时共享的生命周期契约测试；
+- Tauri 桌面壳、受管 `otrace` sidecar、五运行时自动发现和结构化诊断抽屉；
+- Adapter 健康度聚合、可定位的 severity/code/location 失败证据，以及五运行时共享的生命周期契约测试；
 - SQLite 事实体检、派生投影安全修复、按 Run 导出和不含会话正文的诊断包；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
@@ -41,6 +45,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 | Claude Code | JSONL transcript | 自动发现 + 增量 polling observer | subagent 与 workflow 文件 |
 | Pi | v1-v3 session JSONL | 被动自动发现 + 可选 RPC bridge | 显式 telemetry extension |
 | Codex | rollout JSONL | 递归自动发现 + ACK 后提交字节游标 | 原生 `thread_spawn.parent_thread_id` |
+| Google Antigravity (`agy`) | `transcript.jsonl` | 自动发现 + 350 ms 增量 watcher + 可选 Hooks | `invoke_subagent` 返回的 conversation ID |
 
 Pi 的普通对话分支不会被误判为子 Agent。只有 extension 提供显式 telemetry 时，Orchetrace 才展示 Pi 子 Agent 拓扑。
 
@@ -52,6 +57,7 @@ flowchart LR
     Pi["Pi"] --> Adapters
     Harness["DeepSeek Harness"] --> Adapters
     Codex["Codex"] --> Adapters
+    Antigravity["Google Antigravity / agy"] --> Adapters
     Adapters --> Protocol["Canonical Event v1"]
     Protocol --> Core["Rust Core + SQLite"]
     Core --> Projection["Catalog / Snapshot / Delta"]
@@ -76,7 +82,7 @@ flowchart LR
 M7 发布链路提供三种安装入口。Beta 包发布后，终端版可以通过 npm 或 Homebrew 安装，桌面版可以通过 Homebrew Cask 安装：
 
 ```bash
-# npm：原生 orche/otrace + 四套 Runtime Adapter
+# npm：原生 orche/otrace + 五套 Runtime Adapter
 npm install -g @orchetrace/cli@beta
 
 # Homebrew CLI
@@ -121,13 +127,13 @@ cargo install --path crates/cli --bins
 orche
 ```
 
-`orche` 默认会启动本机 Ingest，并被动观察当前及后续打开的 Claude Code、Codex、Pi 和 DeepSeek Harness 会话；无需另外启动桌面端或 watcher。它会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
+`orche` 默认会启动本机 Ingest，并被动观察当前及后续打开的 Claude Code、Codex、Pi、DeepSeek Harness 和 Antigravity 会话；无需另外启动桌面端或 watcher。它会依次检查 `ORCHETRACE_DATA_DIR`、桌面应用数据目录以及当前工程的 `apps/web/public/data`。也可以显式指定：
 
 ```bash
 orche --data-dir /path/to/orchetrace/data
 ```
 
-节点支持鼠标单击，点击后从右侧打开真实 prompt、reasoning、message、tool 与 outcome 详情；右上角 `map` 是随历史时间游标同步变化的拓扑缩略图，底部时间轴也可以直接点击定位。仅查看已有快照、不启动观察器时使用 `orche --replay`。
+节点支持鼠标单击，点击后从右侧打开真实 prompt、reasoning、message、tool、Token usage 与 outcome 详情；鼠标位于详情侧栏时滚轮滚动内容，位于拓扑区域时滚轮只切换当前 Session 内的 Agent。每个节点同时显示 Agent 自身 Token 与包含全部后代的 `Σ Subtree` Token，详情进一步区分 Self、Subtree、Session，并拆分 input、output、cached input 和 cache write；Session 总量只求和每个 Agent 的 Self，不重复计入子树。没有 usage 事实的 Runtime 显示 `0 tok`，不会使用估算值。右上角 `map` 是随历史时间游标同步变化的拓扑缩略图，底部时间轴也可以直接点击定位。超过 1,000 条的 Timeline 首屏只读取概览，打开详情、开始回放或向历史回溯时才按需读取完整分页。仅查看已有快照、不启动观察器时使用 `orche --replay`。
 
 受控环境可使用默认 `standard` 模式，它保留摘要和工具证据，但会递归遮蔽常见 token、password、authorization、cookie、private key 等字段。敏感环境建议只记录运行元数据，并设置自动保留边界：
 
@@ -146,10 +152,17 @@ orche
 - `↑` / `↓` 或 `j` / `k`：选择 Agent；
 - `Enter`：打开或关闭右侧详情；
 - `←` / `→` 或 `h` / `l`：移动真实时间游标；
-- `Space`：以真实时间 1× 播放或暂停；
-- `[` / `]`：切换 Run；
+- `Space`：以当前倍率播放或暂停；
+- `,` / `.`：在 `0.25×` 、`0.5×`、`1×`、`2×`、`4×`、`8×` 之间降低或提高回放速度；
+- `Tab` / `Shift+Tab` 或 `[` / `]`：切换 Session；
 - `f`：恢复跟随最新状态；
+- `e`：重命名当前 Session；
+- `d`：删除当前 Session 及全部子 Agent，确认后执行；
 - `q`：退出并返回原终端。
+
+Session 重命名只新增一条本地 metadata 事件，不修改 Runtime 的原始 Session ID；删除通过受 token 认证的本机 Ingest 原子执行，并同步更新 SQLite、Catalog、Snapshot 与时间轴。正在持续写入的 Runtime 可能在删除后重新发现同一 Session；如需永久清理活动会话，应先结束对应 Agent。
+在 Tauri 桌面端的 Session 选择器顶部也可直接重命名或删除；操作只在受管 Ingest 运行时启用，认证 token 不会暴露给普通浏览器页面。
+Web/Tauri 时间轴底部提供同样的倍率选择器，播放中也能即时切换，不会改变已选的历史游标。
 
 ## 启动本地 Live 服务
 
@@ -267,6 +280,27 @@ Codex `session_meta` 中的 `thread_spawn.parent_thread_id`、`depth`、Agent �
 
 Runtime 协议对 `codex` 有内置描述符，同时允许 Adapter 发送其他非空 Runtime 标识；未知 Runtime 会使用安全的中性色和自动生成标签显示，不再要求 Rust Core 发版才能存储与回放。
 
+## 接入 Google Antigravity（agy）
+
+无需改变 `agy` 的启动方式。`orche`、Tauri 受管 Ingest 或下面的独立 watcher 会自动发现 CLI 已经创建以及之后新建的会话：
+
+```bash
+export ORCHETRACE_TOKEN="<与 otrace serve 相同的 token>"
+npm run antigravity:auto
+```
+
+默认监听 `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript.jsonl`。发现新会话的间隔是 1 秒；附着后按字节每 350 ms 增量读取，只在 Rust ACK 后提交 `0600` cursor。prompt、reasoning、工具开始/结束、真实耗时和 `invoke_subagent` 子 conversation 会映射到统一时间线。会话结束后不会消失，可在 Run 列表中继续选择和回放。
+
+为了让早于 Orchetrace 启动的旧会话在下一次模型或工具事件发生时立即接管，可以显式安装官方 Antigravity Hook：
+
+```bash
+orche hooks antigravity install
+orche hooks agy status
+orche hooks antigravity uninstall
+```
+
+Hook 写入用户级 `~/.gemini/config/hooks.json` 中独立的 `orchetrace-observer` 项，并保留其他 Hook。它只登记 conversation ID、transcript 路径、模型、工具名和时间等发现元数据，不复制 prompt、回答或工具参数；事件正文仍由 transcript watcher 读取，因此不会产生两套重复节点。`install` 是显式操作，`orche` 不会自行修改 Antigravity 配置。从源码开发时也可使用 `npm run antigravity:hook -- <action>`。
+
 ## 接入 DeepSeek Harness
 
 无需修改 Harness 配置即可监听当前和新会话：
@@ -326,11 +360,11 @@ npm run desktop:check
 npm run desktop:dev
 ```
 
-桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness、Codex 四个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
+桌面端可以固定参数启动和停止受管 sidecar，并自动托管 Claude、Pi、DeepSeek Harness、Codex、Antigravity 五个接收器。token 只通过子进程环境传递，不出现在命令行；停止时先回收接收器，再通过认证后的协议级关闭停止 Rust 服务，超时后才强制终止。
 
 ## 打包与发布
 
-正式安装包内置 `otrace`（含多帧 Zstandard 解压）、Node.js 22 运行时和四套 TypeScript Adapter，不依赖用户预装 Node.js 或 `zstd`，也不会从开发源码目录加载脚本。为了避免打入依赖 Homebrew 动态库的不可移植二进制，本地打包必须显式指向 Node.js 官方发行包：
+正式安装包内置 `otrace`（含多帧 Zstandard 解压）、Node.js 22 运行时和五套 TypeScript Adapter，不依赖用户预装 Node.js 或 `zstd`，也不会从开发源码目录加载脚本。为了避免打入依赖 Homebrew 动态库的不可移植二进制，本地打包必须显式指向 Node.js 官方发行包：
 
 ```bash
 export ORCHETRACE_RELEASE_NODE=/path/to/node-v22.x/bin/node
@@ -347,7 +381,7 @@ cargo tauri build --ci \
 
 安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
 
-推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并验证 `orche`、`otrace` 与四套 Adapter 能脱离源码目录加载。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
+推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并验证 `orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
 
 设置仓库变量 `NPM_PUBLISH=true` 后，流水线会按“平台包优先、主包最后”的顺序发布 `@orchetrace/cli@beta`，并启用 npm provenance。设置 `HOMEBREW_PUBLISH=true` 和具备 `wang-zhengxin/homebrew-tap` 写权限的 `HOMEBREW_TAP_TOKEN` 后，会依据 Release 中不可变资产的 SHA-256 自动更新 Formula 与 Cask。未设置这些开关时仍会构建、打包和验证，避免误发布。
 
@@ -412,7 +446,7 @@ scripts/                      开发、smoke 和性能脚本
 - 删除任意 Session 时会级联删除所有后代 Session，并使派生 checkpoint 失效；
 - 数据库、游标、token 配置和本地设计资料均被 Git 忽略。
 
-已有数据库可以在停止 Ingest 后执行一次性清理；传入 `--data-dir` 会同时重建 Web/TUI 派生快照：
+运行 `orche` 时可直接用 `e` / `d` 管理当前 Session。以下 CLI 用于 Ingest 已停止时的一次性离线清理；传入 `--data-dir` 会同时重建 Web/TUI 派生快照：
 
 ```bash
 # 将已有事件改写为仅元数据

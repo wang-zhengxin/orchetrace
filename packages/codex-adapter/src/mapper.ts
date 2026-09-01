@@ -112,6 +112,16 @@ function eventMessage(
       return [event(record, context, "reasoning", "assistant.reasoning_summary", {
         summary: stringValue(record.payload.text) ?? stringValue(record.payload.message) ?? "",
       })];
+    case "token_count": {
+      const info = objectValue(record.payload.info);
+      const usage = objectValue(info?.last_token_usage);
+      return usage
+        ? [event(record, context, "usage", "step.ended", {
+          usage,
+          model_context_window: numberValue(info?.model_context_window),
+        })]
+        : [];
+    }
     case "context_compacted":
       return [event(record, context, "compacted", "context.compacted", {
         summary: "Codex context compacted",

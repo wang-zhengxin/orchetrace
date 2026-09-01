@@ -37,13 +37,14 @@ for (const [packageName, expected] of [
   ["pi-adapter", "orchetrace-pi-auto"],
   ["dsh-observer", "orchetrace-dsh-auto"],
   ["codex-adapter", "orchetrace-codex-auto"],
+  ["antigravity-adapter", "orchetrace-antigravity-auto"],
 ]) {
   const script = path.join(root, "packages", packageName, "src", "auto-cli.ts");
   const { stdout } = await execute(node, [script, "--help"], { cwd: root });
   if (!stdout.includes(expected)) throw new Error(`${packageName} did not load with bundled Node.js`);
 }
 
-console.log(`Verified ${target}: ${manifest.node_version}, otrace, frontend, and 4 runtime adapters`);
+console.log(`Verified ${target}: ${manifest.node_version}, otrace, frontend, and 5 runtime adapters`);
 
 function argumentValue(name) {
   const index = process.argv.indexOf(name);

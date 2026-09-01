@@ -6,4 +6,5 @@
 {"timestamp":"2026-08-30T01:00:01.400Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":{"success":true,"stdout":"4 matches"}}}
 {"timestamp":"2026-08-30T01:00:01.600Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"The runtime needs a registry."}}
 {"timestamp":"2026-08-30T01:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Implemented the registry."}}
+{"timestamp":"2026-08-30T01:00:02.050Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1250,"cached_input_tokens":900,"output_tokens":75,"reasoning_output_tokens":15,"total_tokens":1325},"last_token_usage":{"input_tokens":1250,"cached_input_tokens":900,"output_tokens":75,"reasoning_output_tokens":15,"total_tokens":1325},"model_context_window":258400}}}
 {"timestamp":"2026-08-30T01:00:02.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Implemented the registry."}}

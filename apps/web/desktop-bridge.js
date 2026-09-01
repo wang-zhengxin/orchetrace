@@ -47,6 +47,23 @@ export function stopManagedIngest(options = {}) {
   return invokeDesktop("stop_managed_ingest", options);
 }
 
+export function renameSession(run, label, options = {}) {
+  return invokeDesktop("rename_session", options, {
+    runtime: run.runtime,
+    sourceId: run.source_id,
+    sessionId: run.root_session_id,
+    label,
+  });
+}
+
+export function deleteSession(run, options = {}) {
+  return invokeDesktop("delete_session", options, {
+    runtime: run.runtime,
+    sourceId: run.source_id,
+    sessionId: run.root_session_id,
+  });
+}
+
 export function readClaudeIntegrationStatus(options = {}) {
   return invokeDesktop("claude_integration_status", options);
 }

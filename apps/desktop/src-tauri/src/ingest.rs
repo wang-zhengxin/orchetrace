@@ -148,6 +148,18 @@ impl ManagedIngest {
         Ok(self.snapshot(&process))
     }
 
+    pub fn send_control(&self, frame: serde_json::Value) -> Result<serde_json::Value, String> {
+        let status = self.status()?;
+        if status.phase != "running" {
+            return Err("start the managed ingest service first".to_owned());
+        }
+        let token = status
+            .connection_token
+            .as_deref()
+            .ok_or_else(|| "managed ingest has no control token".to_owned())?;
+        send_authenticated_control(&status.ingest_endpoint, token, frame)
+    }
+
     pub fn start(&self) -> Result<IngestStatus, String> {
         let mut process = self.lock_process()?;
         self.refresh(&mut process)?;
@@ -402,6 +414,37 @@ fn request_graceful_shutdown(ingest_endpoint: &str, token: &str) -> Result<(), S
         return Err("server did not acknowledge graceful shutdown".to_owned());
     }
     Ok(())
+}
+
+fn send_authenticated_control(
+    ingest_endpoint: &str,
+    token: &str,
+    frame: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let stream = TcpStream::connect(ingest_endpoint)
+        .map_err(|error| format!("control connection failed: {error}"))?;
+    stream
+        .set_read_timeout(Some(CONTROL_TIMEOUT))
+        .map_err(|error| format!("control read timeout failed: {error}"))?;
+    stream
+        .set_write_timeout(Some(CONTROL_TIMEOUT))
+        .map_err(|error| format!("control write timeout failed: {error}"))?;
+    let mut writer = BufWriter::new(
+        stream
+            .try_clone()
+            .map_err(|error| format!("control connection clone failed: {error}"))?,
+    );
+    write_control_frame(
+        &mut writer,
+        &serde_json::json!({ "kind": "hello", "protocol": 1, "token": token }),
+    )?;
+    let mut reader = BufReader::new(stream);
+    let ready = read_control_frame(&mut reader)?;
+    if ready.get("kind").and_then(serde_json::Value::as_str) != Some("ready") {
+        return Err("server rejected the authenticated control handshake".to_owned());
+    }
+    write_control_frame(&mut writer, &frame)?;
+    read_control_frame(&mut reader)
 }
 
 fn write_control_frame(

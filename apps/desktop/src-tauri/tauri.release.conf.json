@@ -14,6 +14,7 @@
       "../../../packages/pi-adapter/src": "packages/pi-adapter/src",
       "../../../packages/dsh-observer/src": "packages/dsh-observer/src",
       "../../../packages/codex-adapter/src": "packages/codex-adapter/src",
+      "../../../packages/antigravity-adapter/src": "packages/antigravity-adapter/src",
       "resources": "resources"
     },
     "icon": [
@@ -24,6 +25,6 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Local-first multi-agent observability",
-    "longDescription": "Observe, replay, and diagnose Claude Code, Pi, DeepSeek Harness, and Codex agent sessions from one local-first desktop application."
+    "longDescription": "Observe, replay, and diagnose Claude Code, Pi, DeepSeek Harness, Codex, and Google Antigravity agent sessions from one local-first desktop application."
   }
 }

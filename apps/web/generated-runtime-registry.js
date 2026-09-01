@@ -98,5 +98,32 @@ export const GENERATED_RUNTIME_DESCRIPTORS = Object.freeze([
       "directoryFlag": "--sessions-dir",
       "stateDirectory": "codex-auto"
     }
+  },
+  {
+    "id": "antigravity",
+    "label": "Google Antigravity",
+    "shortLabel": "AGY",
+    "accent": "#a78bfa",
+    "aliases": [
+      "agy",
+      "google-antigravity"
+    ],
+    "sessionDirectory": "~/.gemini/antigravity-cli/brain",
+    "capabilities": [
+      "passive",
+      "stream",
+      "subagents",
+      "tools",
+      "usage",
+      "hooks"
+    ],
+    "observer": {
+      "package": "antigravity-adapter",
+      "entrypoint": "src/auto-cli.ts",
+      "scriptEnv": "ORCHETRACE_ANTIGRAVITY_AUTO_SCRIPT",
+      "sessionsEnv": "ORCHETRACE_ANTIGRAVITY_SESSIONS_DIR",
+      "directoryFlag": "--sessions-dir",
+      "stateDirectory": "antigravity-auto"
+    }
   }
 ]);

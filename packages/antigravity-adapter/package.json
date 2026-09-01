@@ -1,0 +1,16 @@
+{
+  "name": "@orchetrace/antigravity-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "bin": {
+    "orchetrace-antigravity-auto": "./src/auto-cli.ts",
+    "orchetrace-antigravity-hook": "./src/hook-cli.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "auto": "node src/auto-cli.ts",
+    "hook": "node src/hook-cli.ts"
+  }
+}

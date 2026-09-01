@@ -25,6 +25,7 @@ const snapshot = {
       outcome_evidence: "result",
       started_at: "2026-08-25T00:00:04.000Z",
       last_activity_at: "2026-08-25T00:00:08.000Z",
+      token_usage: { input_tokens: 130, output_tokens: 20, cached_input_tokens: 80, cache_write_tokens: 0, reasoning_output_tokens: 0, total_tokens: 150, reports: 2 },
       activations: [{ id: "b", started_at: "2026-08-25T00:00:04.100Z", ended_at: "2026-08-25T00:00:08.000Z", end_status: "inactive" }],
       tools: [{ call_id: "t", name: "Read", started_at: "2026-08-25T00:00:05.000Z", ended_at: "2026-08-25T00:00:07.000Z", outcome: "succeeded", duration_ms: 2000, input_summary: "src", output_summary: "ok" }],
     },
@@ -35,7 +36,9 @@ const snapshot = {
     { session_id: "child", at: "2026-08-25T00:00:04.000Z", kind: "spawn", label: "child", outcome: null },
     { session_id: "child", at: "2026-08-25T00:00:04.200Z", kind: "prompt", label: "Inspect code", outcome: null },
     { session_id: "child", at: "2026-08-25T00:00:05.000Z", kind: "tool", label: "Read", outcome: null },
+    { session_id: "child", at: "2026-08-25T00:00:05.500Z", kind: "message", label: "working", outcome: null, token_usage: { input_tokens: 90, output_tokens: 10, cached_input_tokens: 60, cache_write_tokens: 0, reasoning_output_tokens: 0, total_tokens: 100, reports: 1 } },
     { session_id: "child", at: "2026-08-25T00:00:07.000Z", kind: "tool-result", label: "Read", outcome: "succeeded" },
+    { session_id: "child", at: "2026-08-25T00:00:07.500Z", kind: "message", label: "done", outcome: null, token_usage: { input_tokens: 40, output_tokens: 10, cached_input_tokens: 20, cache_write_tokens: 0, reasoning_output_tokens: 0, total_tokens: 50, reports: 1 } },
     { session_id: "child", at: "2026-08-25T00:00:08.000Z", kind: "outcome", label: "agent outcome", outcome: "succeeded" },
   ],
 };
@@ -64,6 +67,9 @@ test("in-flight tools do not leak their future result", () => {
   assert.equal(child.tools[0].ended_at, null);
   assert.equal(child.tools[0].output_summary, null);
   assert.equal(child.outcome, null);
+  assert.equal(child.token_usage.total_tokens, 100);
+  assert.equal(child.subtree_token_usage.total_tokens, 100);
+  assert.equal(view.agents.find((agent) => agent.id === "root").subtree_token_usage.total_tokens, 100);
 });
 
 test("settled outcome and tool evidence appear after their event", () => {
@@ -71,6 +77,7 @@ test("settled outcome and tool evidence appear after their event", () => {
   const child = view.agents.find((agent) => agent.id === "child");
   assert.equal(child.outcome, "succeeded");
   assert.equal(child.tools[0].output_summary, "ok");
+  assert.equal(child.token_usage.total_tokens, 150);
   const events = agentEventsAtTime(snapshot, "child", Date.parse("2026-08-25T00:00:08.500Z"));
   assert.equal(events.find((item) => item.kind === "tool").input_summary, "src");
   assert.equal(events.find((item) => item.kind === "tool-result").output_summary, "ok");

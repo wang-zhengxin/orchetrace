@@ -7,6 +7,7 @@ export const RUNTIME_PACKAGES = [
   "pi-adapter",
   "dsh-observer",
   "codex-adapter",
+  "antigravity-adapter",
 ];
 
 export const DISTRIBUTION_TARGETS = Object.freeze({
@@ -96,7 +97,7 @@ export function resolveFrom(root, value, fallback) {
 export function renderHomebrewFormula({ version, repository, arm, intel }) {
   const releaseVersion = normalizeVersion(version);
   return `class Orchetrace < Formula
-  desc "Observe Claude Code, Codex, Pi, and DeepSeek Harness agents"
+  desc "Observe Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity agents"
   homepage "https://github.com/${repository}"
   version "${releaseVersion}"
 

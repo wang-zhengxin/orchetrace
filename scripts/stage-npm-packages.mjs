@@ -64,7 +64,7 @@ async function stageMainPackage() {
   await writeJson(path.join(mainRoot, "package.json"), {
     name: "@orchetrace/cli",
     version,
-    description: "Local-first multi-Agent observability CLI for Claude Code, Codex, Pi, and DeepSeek Harness",
+    description: "Local-first multi-Agent observability CLI for Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity",
     license: "MIT",
     type: "module",
     bin: {

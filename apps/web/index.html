@@ -67,7 +67,7 @@
           <input id="timeline-scrubber" type="range" min="0" max="1000" value="1000" aria-label="Replay position" />
         </div>
         <footer class="terminal-status">
-          <b>orche</b><button id="timeline-play" type="button">▶ PLAY</button><span>session</span><strong id="footer-stats">0 agents · 0 tools</strong><time id="timeline-date">—</time><span class="terminal-help">q quit · ? help · space play/pause</span>
+          <b>orche</b><button id="timeline-play" type="button">▶ PLAY</button><label class="playback-speed"><span>SPEED</span><select id="playback-speed" aria-label="Replay speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></label><span>session</span><strong id="footer-stats">0 agents · 0 tools</strong><time id="timeline-date">—</time><span class="terminal-help">space play/pause · ,/. speed</span>
         </footer>
       </section>
 
@@ -75,6 +75,17 @@
         <div id="source-dsh"><span id="source-count-dsh">0</span></div><div id="source-claude"><span id="source-count-claude">0</span></div><div id="source-pi"><span id="source-count-pi">0</span></div><div id="source-codex"><span id="source-count-codex">0</span></div><span id="index-state">LOCAL ONLY</span>
       </div>
     </div>
+
+    <dialog class="session-dialog" id="session-dialog">
+      <form method="dialog" id="session-form">
+        <header><span class="eyebrow">SESSION CONTROL</span><button value="cancel" aria-label="Close">×</button></header>
+        <h2 id="session-dialog-title">Rename session</h2>
+        <p id="session-dialog-copy">Change the local display name without altering the provider session ID.</p>
+        <label id="session-name-field"><span>DISPLAY NAME</span><input id="session-name-input" maxlength="80" autocomplete="off" /></label>
+        <p class="session-dialog-error" id="session-dialog-error" hidden></p>
+        <footer><button value="cancel">CANCEL</button><button class="session-dialog-submit" id="session-dialog-submit" value="default">APPLY</button></footer>
+      </form>
+    </dialog>
 
     <button class="drawer-scrim" id="drawer-scrim" type="button" hidden aria-label="Close runtime diagnostics"></button>
     <aside class="runtime-drawer" id="runtime-drawer" hidden aria-labelledby="runtime-title">

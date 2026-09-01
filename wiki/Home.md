@@ -1,6 +1,6 @@
 # Orchetrace Wiki
 
-> 面向 Claude Code、Codex、Pi 和 DeepSeek Harness 的本地优先多 Agent 可观测工作台。
+> 面向 Claude Code、Codex、Pi、DeepSeek Harness 和 Google Antigravity（`agy`）的本地优先多 Agent 可观测工作台。
 
 Orchetrace 收集 Agent Runtime 已经产生的事实，将不同供应商的会话、父子 Agent、工具调用、运行状态和终态证据转换为统一的时间线与拓扑图。所有核心数据默认保留在本机。
 
@@ -55,6 +55,7 @@ flowchart LR
     Codex["Codex"] --> Adapter
     Pi["Pi"] --> Adapter
     Harness["DeepSeek Harness"] --> Adapter
+    Antigravity["Google Antigravity / agy"] --> Adapter
     Adapter --> Protocol["Canonical Event v1"]
     Protocol --> Ingest["Rust Ingest"]
     Ingest --> SQLite["SQLite facts"]
@@ -71,6 +72,7 @@ flowchart LR
 | Codex | rollout JSONL | 递归发现 + ACK cursor | `thread_spawn.parent_thread_id` |
 | Pi | v1-v3 session JSONL | 被动 watcher + 可选 RPC Bridge | 显式 telemetry extension |
 | DeepSeek Harness | Zstandard persistence | 被动 watcher + Cordis Observer | session parent 和 descriptor |
+| Google Antigravity (`agy`) | `transcript.jsonl` | 自动发现 + 350 ms 增量 watcher + 可选 Hooks | `invoke_subagent` conversation ID |
 
 Pi 的普通对话分支不会被当成子 Agent。如果 Pi extension 没有发送 Orchetrace telemetry，界面不会仅根据工具名称猜测拓扑。
 
@@ -79,7 +81,7 @@ Pi 的普通对话分支不会被当成子 Agent。如果 Pi extension 没有发
 M7 提供 npm、Homebrew Formula 和 Homebrew Cask 三条 Beta 分发路径。相关包发布后可以执行：
 
 ```bash
-# 终端 CLI、原生 orche/otrace 和四套 Runtime Adapter
+# 终端 CLI、原生 orche/otrace 和五套 Runtime Adapter
 npm install -g @orchetrace/cli@beta
 
 # Homebrew 终端版
@@ -119,6 +121,15 @@ npm run dev:web
 
 打开 <http://127.0.0.1:4173>。演示数据包含多层 Agent、成功和失败工具、终态证据以及真实时间轴。
 
+### 演示媒体
+
+[![Orchetrace 14-Agent 回放概览](../demo/orchetrace-overview.png)](../demo/orchetrace-demo.mp4?raw=1)
+
+- [播放或下载 16 秒 MP4 演示](../demo/orchetrace-demo.mp4?raw=1)；
+- [查看轻量 GIF 回放](../demo/orchetrace-replay-keyframes.gif)。
+
+两份媒体来自同一次确定性回放，覆盖 Agent 按事件时间出现、多行时间泳道、`1×` 到 `2×` 动态调速、失败节点证据侧栏，以及横向/纵向布局切换。它们展示的是脱敏 fixture，不包含本机真实 Session 内容。
+
 ## 终端 TUI
 
 在项目中启动：
@@ -134,7 +145,7 @@ cargo install --path crates/cli --bins
 orche
 ```
 
-`orche` 默认启动本地 Ingest，并被动观察已打开以及之后新建的四种 Runtime 会话。只查看已有投影时使用：
+`orche` 默认启动本地 Ingest，并被动观察已打开以及之后新建的五种 Runtime 会话。只查看已有投影时使用：
 
 ```bash
 orche --replay
@@ -148,12 +159,19 @@ orche --data-dir /path/to/orchetrace/data
 | `↑` / `↓` 或 `j` / `k` | 选择 Agent |
 | `Enter` | 打开或关闭右侧详情 |
 | `←` / `→` 或 `h` / `l` | 移动真实时间游标 |
-| `Space` | 按 1× 真实时间播放或暂停 |
-| `[` / `]` | 切换 Run |
+| `Space` | 按当前倍率播放或暂停 |
+| `,` / `.` | 在 `0.25×` 到 `8×` 的预设之间降速或加速 |
+| `Tab` / `Shift+Tab` 或 `[` / `]` | 切换 Session |
 | `f` | 返回并跟随最新状态 |
+| `e` | 重命名当前 Session |
+| `d` | 删除当前 Session 及全部子 Agent，确认后执行 |
 | `q` | 退出 |
 
-右上角缩略图与当前时间游标同步；底部时间轴按 Agent 分行，节点只在对应时间之后出现。
+右上角缩略图与当前时间游标同步；底部时间轴按 Agent 分行，节点只在对应时间之后出现。每个节点显示 Runtime 实际上报的 Self Token 和包含后代 Agent 的 `Σ Subtree` Token；详情区分 Self、Subtree、Session，并拆分 input、output、cached input 和 cache write。Session 总量只求和 Self，避免重复计费。鼠标位于详情侧栏时滚轮滚动详情，位于拓扑区域时只切换当前 Session 内的 Agent；缺少 usage 事实时显示 `0 tok`，不做估算。超过 1,000 条的 Timeline 首屏使用概览，打开详情、回放或回溯时按需读取完整分页，Token 历史查询使用累计索引。
+
+重命名会保留 Runtime、source 和原始 Session ID，仅记录一条本地 `session.metadata_changed`。删除由受 token 认证的本机 Ingest 执行，会级联删除后代 Agent 并同步重建 Catalog、Snapshot 和时间轴。活动 Runtime 如果继续写入，watcher 可能再次发现已删除的 Session；永久清理前应先结束对应 Agent。
+桌面端还会在 Session 选择器内提供 `RENAME` / `DELETE`；两个操作都经过 Tauri 命令转发到受认证的本机 Ingest，普通 Web 模式不获取控制 token，也不启用破坏性按钮。
+Web/Tauri 底部时间轴提供 `0.25×` / `0.5×` / `1×` / `2×` / `4×` / `8×` 倍率选择，也可使用 `,` / `.` 切换；播放过程中改速会从当前游标继续。
 
 ## Web 与桌面端
 
@@ -270,9 +288,28 @@ npm run dsh:auto
     sourceId: dsh-local
 ```
 
+### Google Antigravity（agy）
+
+```bash
+export ORCHETRACE_TOKEN="<ingest token>"
+npm run antigravity:auto
+```
+
+默认发现 `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript.jsonl`，1 秒内附着新会话，附着后每 350 ms 按字节读取新增完整行。读取游标只有在 Rust ACK 后才提交，因此重启不会丢事件，会话结束后也会保留在 Run Catalog 中。
+
+需要立即接管较早打开的会话时，可显式安装 Hook：
+
+```bash
+orche hooks antigravity install
+orche hooks agy status
+orche hooks antigravity uninstall
+```
+
+Orchetrace 只在 `~/.gemini/config/hooks.json` 中维护 `orchetrace-observer` 这一项。Hook 邮箱不保存 prompt、回答和工具参数，正文由 transcript watcher 唯一映射，避免重复事件。默认 `orche` 不修改用户 Hook 配置。
+
 ### 自动发现策略
 
-四个被动 watcher 默认接管最近 6 小时活跃的会话。导入全部历史时追加：
+五个被动 watcher 默认接管最近 6 小时活跃的会话。导入全部历史时追加：
 
 ```bash
 npm run codex:auto -- --include-existing
@@ -289,6 +326,8 @@ npm run codex:auto -- --include-existing
 - 终态和 outcome evidence 只在对应事件发生后出现；
 - 拓扑缩略图和主视图保持一致。
 
+Web/Tauri 可在播放过程中选择 `0.25×`、`0.5×`、`1×`、`2×`、`4×` 或 `8×`；切换倍率不会重置当前游标。节点集合按当前历史时刻重新计算并在可用画布内居中，横向与纵向布局共用相同的父子关系。
+
 单击 Agent 节点可查看：
 
 - prompt excerpt；
@@ -296,6 +335,7 @@ npm run codex:auto -- --include-existing
 - assistant message；
 - activation 起止时间；
 - tool input/output summary、耗时和结果；
+- Agent Self Token、包含后代的 `Σ Subtree` Token、Session 总量及 input/output/cache 明细；
 - terminal outcome 与证据。
 
 超过 1,000 条的 Timeline 会分页持久化。首屏只读取概览，回放和详情按需加载历史页。
@@ -325,7 +365,7 @@ orche
 
 ### 已有数据清理
 
-操作前先停止 Ingest。
+以下是离线维护命令，操作前先停止 Ingest；实时运行时优先使用 TUI 的 `e` / `d`。
 
 ```bash
 # 将已有事件改写为仅元数据
@@ -464,7 +504,7 @@ Observer 需要实现 `start()`、`scanOnce()` 和 `stop()`。事件必须使用
 1. 脱敏原始 fixture 和 Canonical fixture；
 2. Mapper 测试；
 3. Replay、增量读取、截断和重启测试；
-4. 四运行时共享生命周期契约；
+4. 五运行时共享生命周期契约；
 5. Rust fold/projection 测试；
 6. 未知 required event 的显式 diagnostic。
 
@@ -514,12 +554,12 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 ### 已完成
 
 - Runtime Registry 和外部 Adapter 扩展机制；
-- Claude、Codex、Pi、DeepSeek Harness Adapter；
+- Claude、Codex、Pi、DeepSeek Harness、Antigravity Adapter；
 - Rust Core、SQLite、checkpoint、delta 和 Timeline 分页；
 - Web、Tauri Alpha 和终端 TUI；
 - 子 Agent 拓扑、真实时间回放和侧边详情；
 - 隐私、保留、删除、体检、修复和导出；
-- 四运行时生命周期契约与结构化诊断；
+- 五运行时生命周期契约与结构化诊断；
 - Tauri release bundle、内置 `otrace`/Node.js/Adapter 资源与四平台 GitHub 构建矩阵；
 - 安装包资源清单、Node.js 许可文件和自动化发布前校验；
 - macOS ARM/Intel、Linux x64、Windows x64 可搬迁 CLI archive 与 SHA-256；

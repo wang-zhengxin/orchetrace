@@ -9,7 +9,7 @@ use orchetrace_protocol::{CanonicalEvent, PrivacyPolicy, RuntimeKind, Validation
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const PRIVACY_POLICY_KEY: &str = "privacy-policy-fingerprint";
 const MAX_DIAGNOSTIC_ISSUES: usize = 100;
 
@@ -278,6 +278,15 @@ impl EventStore {
                  COMMIT;",
             )?;
         }
+        if version <= 3 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE INDEX IF NOT EXISTS canonical_events_parent_session
+                    ON canonical_events(runtime, source_id, parent_session_id, session_id);
+                 PRAGMA user_version = 4;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self { connection })
     }
 
@@ -492,55 +501,55 @@ impl EventStore {
         source_id: &str,
         session_id: &str,
     ) -> Result<DeleteOutcome, StorageError> {
-        let events = self.load_events()?;
-        let mut sessions = BTreeSet::from([session_id.to_owned()]);
-        loop {
-            let previous_len = sessions.len();
-            for event in &events {
-                if &event.runtime == runtime
-                    && event.source_id == source_id
-                    && event
-                        .parent_session_id
-                        .as_ref()
-                        .is_some_and(|parent| sessions.contains(parent))
-                {
-                    sessions.insert(event.session_id.clone());
-                }
-            }
-            if sessions.len() == previous_len {
-                break;
-            }
-        }
-        let event_ids = events
-            .iter()
-            .filter(|event| {
-                &event.runtime == runtime
-                    && event.source_id == source_id
-                    && sessions.contains(&event.session_id)
-            })
-            .map(|event| event.event_id.as_str())
-            .collect::<Vec<_>>();
-        let deleted_sessions = events
-            .iter()
-            .filter(|event| event_ids.contains(&event.event_id.as_str()))
-            .map(|event| event.session_id.as_str())
-            .collect::<BTreeSet<_>>()
-            .len();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for event_id in &event_ids {
-            transaction.execute(
-                "DELETE FROM canonical_events WHERE event_id = ?1",
-                [event_id],
-            )?;
-        }
-        if !event_ids.is_empty() {
-            invalidate_checkpoint(&transaction)?;
+        let runtime = runtime.as_str();
+        let deleted_sessions = transaction.query_row(
+            "WITH RECURSIVE session_tree(session_id) AS (
+                 SELECT ?1
+                 UNION
+                 SELECT event.session_id
+                   FROM canonical_events AS event
+                   JOIN session_tree AS parent
+                     ON event.parent_session_id = parent.session_id
+                  WHERE event.runtime = ?2 AND event.source_id = ?3
+             )
+             SELECT COUNT(DISTINCT event.session_id)
+               FROM canonical_events AS event
+               JOIN session_tree AS selected
+                 ON event.session_id = selected.session_id
+              WHERE event.runtime = ?2 AND event.source_id = ?3",
+            params![session_id, runtime, source_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let deleted_sessions = usize::try_from(deleted_sessions)
+            .expect("SQLite COUNT(DISTINCT) is non-negative and fits usize");
+        let deleted_events = transaction.execute(
+            "WITH RECURSIVE session_tree(session_id) AS (
+                 SELECT ?1
+                 UNION
+                 SELECT event.session_id
+                   FROM canonical_events AS event
+                   JOIN session_tree AS parent
+                     ON event.parent_session_id = parent.session_id
+                  WHERE event.runtime = ?2 AND event.source_id = ?3
+             )
+             DELETE FROM canonical_events
+              WHERE runtime = ?2
+                AND source_id = ?3
+                AND session_id IN (SELECT session_id FROM session_tree)",
+            params![session_id, runtime, source_id],
+        )?;
+        if deleted_events > 0 {
+            // Preserve unaffected per-run snapshots so the server can update only the
+            // source partition touched by this deletion. Removing the catalog row
+            // still makes an interrupted delete fail closed and rebuild on restart.
+            invalidate_catalog_checkpoint(&transaction)?;
         }
         transaction.commit()?;
         Ok(DeleteOutcome {
-            deleted_events: event_ids.len(),
+            deleted_events,
             deleted_sessions,
         })
     }
@@ -640,6 +649,12 @@ impl EventStore {
                 transaction.execute("DELETE FROM run_snapshots WHERE run_id = ?1", [&run_id])?;
             }
         }
+        // Keep unchanged snapshots aligned with the catalog's global durable count.
+        // This matters especially after deletion, when the count moves backwards.
+        transaction.execute(
+            "UPDATE run_snapshots SET checkpoint_event_count = ?1",
+            [event_count],
+        )?;
         transaction.execute(
             "INSERT INTO run_catalog_checkpoint
                 (singleton, checkpoint_event_count, catalog_json)
@@ -935,6 +950,11 @@ fn invalidate_checkpoint(transaction: &Transaction<'_>) -> Result<(), rusqlite::
     Ok(())
 }
 
+fn invalidate_catalog_checkpoint(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
+    transaction.execute("DELETE FROM run_catalog_checkpoint", [])?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SessionIdentity {
     runtime: RuntimeKind,
@@ -1206,7 +1226,7 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert!(store.load_checkpoint().unwrap().is_none());
     }
 
@@ -1273,7 +1293,7 @@ mod tests {
             ),
             session_event("other-1", "other", None, 4, "2026-08-25T00:00:04Z"),
         ];
-        let ingest = orchetrace_ingest::IngestStore::from_events(events.clone()).unwrap();
+        let mut ingest = orchetrace_ingest::IngestStore::from_events(events.clone()).unwrap();
         let mut store = EventStore::open_in_memory().unwrap();
         store.insert_events(&events).unwrap();
         store
@@ -1294,6 +1314,17 @@ mod tests {
             vec!["root-1", "other-1"]
         );
         assert!(store.load_checkpoint().unwrap().is_none());
+
+        let projection = ingest
+            .delete_session_tree(&RuntimeKind::DeepSeekHarness, "local", "child")
+            .unwrap();
+        let catalog = ingest.catalog();
+        store
+            .save_checkpoint(&projection.updated_runs, &catalog, ingest.len())
+            .unwrap();
+        let checkpoint = store.load_checkpoint().unwrap().unwrap();
+        assert_eq!(checkpoint.catalog, catalog);
+        assert_eq!(checkpoint.runs, ingest.runs());
     }
 
     #[test]

@@ -70,6 +70,23 @@ pub static REGISTERED_RUNTIMES: &[RuntimeDescriptor] = &[
             state_directory: "codex-auto",
         },
     },
+    RuntimeDescriptor {
+        id: "antigravity",
+        label: "Google Antigravity",
+        short_label: "AGY",
+        accent: "#a78bfa",
+        aliases: &["agy", "google-antigravity"],
+        session_directory: "~/.gemini/antigravity-cli/brain",
+        capabilities: &["passive", "stream", "subagents", "tools", "usage", "hooks"],
+        observer: RuntimeObserverDescriptor {
+            package: "antigravity-adapter",
+            entrypoint: "src/auto-cli.ts",
+            script_env: "ORCHETRACE_ANTIGRAVITY_AUTO_SCRIPT",
+            sessions_env: "ORCHETRACE_ANTIGRAVITY_SESSIONS_DIR",
+            directory_flag: "--sessions-dir",
+            state_directory: "antigravity-auto",
+        },
+    },
 ];
 
 pub fn runtime_descriptor(runtime: &str) -> Option<&'static RuntimeDescriptor> {

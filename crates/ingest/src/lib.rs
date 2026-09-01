@@ -69,6 +69,14 @@ pub struct IngestOutcome {
     pub pending_event_count: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SessionDeletionOutcome {
+    pub deleted_events: usize,
+    pub deleted_sessions: usize,
+    pub updated_runs: Vec<RunState>,
+    pub removed_run_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunSnapshotDelta {
     pub schema_version: u16,
@@ -394,6 +402,122 @@ impl IngestStore {
 
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
+    }
+
+    pub fn delete_session_tree(
+        &mut self,
+        runtime: &RuntimeKind,
+        source_id: &str,
+        session_id: &str,
+    ) -> Result<SessionDeletionOutcome, IngestError> {
+        let source = SourceKey {
+            runtime: runtime.clone(),
+            source_id: source_id.to_owned(),
+        };
+        let mut sessions = BTreeSet::from([session_id.to_owned()]);
+        loop {
+            let previous_len = sessions.len();
+            for event in self.events.values() {
+                if event.runtime == source.runtime
+                    && event.source_id == source.source_id
+                    && event
+                        .parent_session_id
+                        .as_ref()
+                        .is_some_and(|parent| sessions.contains(parent))
+                {
+                    sessions.insert(event.session_id.clone());
+                }
+            }
+            if sessions.len() == previous_len {
+                break;
+            }
+        }
+        let event_ids = self
+            .events
+            .iter()
+            .filter(|(_, event)| {
+                event.runtime == source.runtime
+                    && event.source_id == source.source_id
+                    && sessions.contains(&event.session_id)
+            })
+            .map(|(event_id, _)| event_id.clone())
+            .collect::<Vec<_>>();
+        if event_ids.is_empty() {
+            return Ok(SessionDeletionOutcome::default());
+        }
+        let deleted_sessions = event_ids
+            .iter()
+            .filter_map(|event_id| self.events.get(event_id))
+            .map(|event| event.session_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let previous_run_ids = self
+            .runs
+            .values()
+            .filter(|run| run.runtime == source.runtime && run.source_id == source.source_id)
+            .map(|run| run.run_id.clone())
+            .collect::<BTreeSet<_>>();
+        let removed_events = event_ids
+            .iter()
+            .filter_map(|event_id| {
+                self.events
+                    .remove(event_id)
+                    .map(|event| (event_id.clone(), event))
+            })
+            .collect::<Vec<_>>();
+
+        let rebuilt = (|| {
+            let partition = build_source_partition(self.events.values(), &source)?;
+            let updated_runs = partition
+                .groups
+                .iter()
+                .map(|(root, events)| fold_run(root, events))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, IngestError>((
+                partition.parents,
+                partition.roots,
+                partition.pending_event_count,
+                updated_runs,
+            ))
+        })();
+        let (parents, roots, pending_event_count, updated_runs) = match rebuilt {
+            Ok(rebuilt) => rebuilt,
+            Err(error) => {
+                self.events.extend(removed_events);
+                return Err(error);
+            }
+        };
+
+        self.runs
+            .retain(|_, run| run.runtime != source.runtime || run.source_id != source.source_id);
+        for run in &updated_runs {
+            self.runs.insert(run.run_id.clone(), run.clone());
+        }
+        self.parents.retain(|session, _| !source.contains(session));
+        self.session_roots
+            .retain(|session, _| !source.contains(session));
+        self.parents.extend(parents);
+        self.session_roots.extend(roots);
+        if updated_runs.is_empty() && pending_event_count == 0 {
+            self.pending_by_source.remove(&source);
+        } else {
+            self.pending_by_source
+                .insert(source.clone(), pending_event_count);
+        }
+        let current_run_ids = updated_runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        Ok(SessionDeletionOutcome {
+            deleted_events: event_ids.len(),
+            deleted_sessions,
+            updated_runs,
+            removed_run_ids: previous_run_ids
+                .difference(&current_run_ids)
+                .cloned()
+                .collect(),
+        })
     }
 
     fn pending_event_count(&self) -> usize {
@@ -984,6 +1108,38 @@ mod tests {
         assert_eq!(delta.upserted_agents[0].id, "child");
         assert_eq!(delta.agent_order.as_ref().map(Vec::len), Some(2));
         assert_eq!(delta.edges.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn deleting_a_session_tree_only_rebuilds_its_source_partition() {
+        let mut store = IngestStore::from_events([
+            discovered("a", "root", None, "root"),
+            discovered("a", "child", Some("root"), "child"),
+            discovered("a", "sibling", Some("root"), "sibling"),
+            discovered("b", "other", None, "other"),
+        ])
+        .unwrap();
+
+        let child = store
+            .delete_session_tree(&RuntimeKind::DeepSeekHarness, "a", "child")
+            .unwrap();
+        assert_eq!(child.deleted_events, 1);
+        assert_eq!(child.deleted_sessions, 1);
+        assert!(child.removed_run_ids.is_empty());
+        assert_eq!(child.updated_runs.len(), 1);
+        assert_eq!(child.updated_runs[0].snapshot.event_count, 2);
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.runs().len(), 2);
+
+        let root = store
+            .delete_session_tree(&RuntimeKind::DeepSeekHarness, "a", "root")
+            .unwrap();
+        assert_eq!(root.deleted_events, 2);
+        assert_eq!(root.deleted_sessions, 2);
+        assert!(root.updated_runs.is_empty());
+        assert_eq!(root.removed_run_ids.len(), 1);
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.runs()[0].source_id, "b");
     }
 
     #[test]

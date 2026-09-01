@@ -89,6 +89,58 @@ fn read_legacy_snapshot(state: tauri::State<'_, DesktopState>) -> Result<Value, 
 }
 
 #[tauri::command]
+fn rename_session(
+    state: tauri::State<'_, DesktopState>,
+    runtime: String,
+    source_id: String,
+    session_id: String,
+    label: String,
+) -> Result<Value, String> {
+    let label = label.trim();
+    if label.is_empty() || label.chars().count() > 80 {
+        return Err("session name must contain 1 to 80 characters".to_owned());
+    }
+    let response = state.ingest.send_control(serde_json::json!({
+        "kind": "control.session.rename",
+        "protocol": 1,
+        "runtime": runtime,
+        "source_id": source_id,
+        "session_id": session_id,
+        "label": label
+    }))?;
+    expect_control_response(response, "session.renamed")
+}
+
+#[tauri::command]
+fn delete_session(
+    state: tauri::State<'_, DesktopState>,
+    runtime: String,
+    source_id: String,
+    session_id: String,
+) -> Result<Value, String> {
+    let response = state.ingest.send_control(serde_json::json!({
+        "kind": "control.session.delete",
+        "protocol": 1,
+        "runtime": runtime,
+        "source_id": source_id,
+        "session_id": session_id
+    }))?;
+    expect_control_response(response, "session.deleted")
+}
+
+fn expect_control_response(response: Value, expected: &str) -> Result<Value, String> {
+    if response.get("kind").and_then(Value::as_str) == Some(expected) {
+        Ok(response)
+    } else {
+        Err(response
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("unexpected response from managed ingest")
+            .to_owned())
+    }
+}
+
+#[tauri::command]
 fn managed_ingest_status(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
     state.ingest.status()
 }
@@ -518,6 +570,8 @@ pub fn run() {
             read_run_timeline_page,
             read_live_config,
             read_legacy_snapshot,
+            rename_session,
+            delete_session,
             managed_ingest_status,
             start_managed_ingest,
             stop_managed_ingest,

@@ -2,6 +2,7 @@ import { applyRunSnapshotDelta } from "./run-delta.js";
 import { agentEventsAtTime, snapshotAtTime, timelineBounds } from "./time-travel.js";
 import { compactTimelineMarkers, indexTimelineBySession } from "./timeline-index.js";
 import { loadTimelinePages } from "./timeline-pages.js";
+import { PLAYBACK_RATES, nextPlaybackRate, scalePlaybackElapsed } from "./playback-speed.js";
 import { runtimeDescriptor, registeredRuntimeDescriptors } from "./runtime-registry.js";
 import {
   aggregateRuntimeDiagnostics,
@@ -10,6 +11,7 @@ import {
 } from "./runtime-diagnostics.js";
 import {
   disableClaudeHooks,
+  deleteSession,
   enableClaudeHooks,
   readCatalog,
   readClaudeIntegrationStatus,
@@ -23,6 +25,7 @@ import {
   readRunDelta,
   readRunSnapshot,
   readRunTimelinePage,
+  renameSession,
   startManagedIngest,
   startHarnessAuto,
   startCodexAuto,
@@ -87,7 +90,9 @@ const state = {
   playbackFrame: null,
   playbackLastFrame: null,
   playbackLastRender: null,
+  playbackRate: 1,
   timelinePromise: null,
+  sessionAction: null,
 };
 
 const refs = Object.fromEntries(
@@ -117,6 +122,7 @@ const refs = Object.fromEntries(
     "timeline-cursor",
     "timeline-event-title",
     "timeline-play",
+    "playback-speed",
     "timeline-date",
     "footer-stats",
     "cursor-state",
@@ -171,6 +177,14 @@ const refs = Object.fromEntries(
     "runtime-source-grid",
     "runtime-diagnostic-count",
     "runtime-log-list",
+    "session-dialog",
+    "session-form",
+    "session-dialog-title",
+    "session-dialog-copy",
+    "session-name-field",
+    "session-name-input",
+    "session-dialog-error",
+    "session-dialog-submit",
   ].map((id) => [camel(id), document.getElementById(id)]),
 );
 
@@ -245,7 +259,18 @@ function wireInteractions() {
   });
   refs.timelineScrubber.addEventListener("pointerdown", () => void ensureFullTimeline());
   refs.timelinePlay.addEventListener("click", () => void beginPlayback());
+  refs.playbackSpeed.addEventListener("change", () => {
+    const rate = Number(refs.playbackSpeed.value);
+    if (PLAYBACK_RATES.includes(rate)) state.playbackRate = rate;
+    state.playbackLastFrame = null;
+    renderTimeline();
+  });
   refs.detailClose.addEventListener("click", closeAgentDetail);
+  refs.sessionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (event.submitter?.value === "cancel") refs.sessionDialog.close();
+    else void applySessionAction();
+  });
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
@@ -256,6 +281,10 @@ function wireInteractions() {
     if (event.code === "Space" && !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) {
       event.preventDefault();
       void beginPlayback();
+    }
+    if ([",", ".", "<", ">"].includes(event.key) && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+      event.preventDefault();
+      changePlaybackRate(event.key === "," || event.key === "<" ? -1 : 1);
     }
   });
   document.querySelectorAll(".mode-button").forEach((button) => {
@@ -480,6 +509,11 @@ function renderManagedIngest(status) {
     : running
       ? "STOP INGEST"
       : "START INGEST";
+  const sessionActions = refs.runList?.querySelector(".session-actions");
+  if (sessionActions) {
+    sessionActions.querySelector("span").textContent = running ? "LOCAL SESSION" : "DESKTOP INGEST REQUIRED";
+    sessionActions.querySelectorAll("button").forEach((button) => { button.disabled = !running; });
+  }
   refs.runtimeIngestEndpoint.textContent = status?.ingest_endpoint ?? "—";
   refs.runtimeLiveEndpoint.textContent = status?.live_endpoint ?? "—";
   refs.runtimePid.textContent = status?.pid ? `${status.pid} · LOCAL` : "—";
@@ -947,6 +981,23 @@ function renderRunRail() {
   refs.runList.replaceChildren();
   const current = currentRunSummary();
   refs.activeRunName.textContent = `${runtimeLabel(current.runtime)} / ${current.label}`;
+  const actions = document.createElement("div");
+  actions.className = "session-actions";
+  const hint = document.createElement("span");
+  const available = Boolean(state.desktopInfo && state.managedIngest?.phase === "running");
+  hint.textContent = available ? "LOCAL SESSION" : "DESKTOP INGEST REQUIRED";
+  const rename = document.createElement("button");
+  rename.type = "button";
+  rename.textContent = "RENAME";
+  rename.disabled = !available;
+  rename.addEventListener("click", () => openSessionDialog("rename"));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "DELETE";
+  remove.disabled = !available;
+  remove.addEventListener("click", () => openSessionDialog("delete"));
+  actions.append(hint, rename, remove);
+  refs.runList.append(actions);
   for (const run of state.catalog.runs) {
     const visualState = run.outcome ?? run.status ?? "unknown";
     const button = document.createElement("button");
@@ -984,6 +1035,49 @@ function renderRunRail() {
     refs.runList.append(button);
   }
   renderSources();
+}
+
+function openSessionDialog(action) {
+  const run = currentRunSummary();
+  state.sessionAction = action;
+  refs.sessionDialogError.hidden = true;
+  refs.sessionDialogError.textContent = "";
+  const deleting = action === "delete";
+  refs.sessionDialogTitle.textContent = deleting ? "Delete session" : "Rename session";
+  refs.sessionDialogCopy.textContent = deleting
+    ? `Delete ${run.label} and its descendant Agent events from local storage? This cannot be undone.`
+    : "Change the local display name without altering the provider session ID.";
+  refs.sessionNameField.hidden = deleting;
+  refs.sessionNameInput.value = run.label;
+  refs.sessionDialogSubmit.textContent = deleting ? "DELETE SESSION" : "APPLY NAME";
+  refs.sessionDialogSubmit.classList.toggle("danger", deleting);
+  refs.sessionDialog.showModal();
+  if (!deleting) refs.sessionNameInput.select();
+}
+
+async function applySessionAction() {
+  const run = currentRunSummary();
+  refs.sessionDialogSubmit.disabled = true;
+  refs.sessionDialogError.hidden = true;
+  try {
+    if (state.sessionAction === "delete") {
+      await deleteSession(run);
+      state.currentRunId = null;
+      state.loadedRunId = null;
+      state.snapshot = null;
+    } else {
+      const label = refs.sessionNameInput.value.trim();
+      if (!label) throw new Error("Session name cannot be empty");
+      await renameSession(run, label);
+    }
+    refs.sessionDialog.close();
+    await refreshCatalog(false);
+  } catch (error) {
+    refs.sessionDialogError.textContent = String(error);
+    refs.sessionDialogError.hidden = false;
+  } finally {
+    refs.sessionDialogSubmit.disabled = false;
+  }
 }
 
 function renderSources() {
@@ -1051,6 +1145,8 @@ function layoutGraph() {
   }
 
   const leafCount = Math.max(leaf, 1);
+  const rootPosition = positions.get(snapshot.root_session_id);
+  if (rootPosition) rootPosition.unit = (leafCount - 1) / 2;
   const viewportWidth = Math.max(760, refs.graphViewport?.clientWidth ?? 0);
   const viewportHeight = Math.max(440, refs.graphViewport?.clientHeight ?? 0);
 
@@ -1075,7 +1171,7 @@ function layoutGraph() {
     const leafStep = 112;
     const contentWidth = cardWidth + maxDepth * depthStep;
     const contentHeight = cardHeight + Math.max(0, leafCount - 1) * leafStep;
-    const leftInset = 52;
+    const leftInset = Math.max(52, (viewportWidth - contentWidth) / 2);
     const topInset = Math.max(38, (viewportHeight - contentHeight) / 2);
     for (const [id, position] of positions) {
       positions.set(id, {
@@ -1166,7 +1262,7 @@ function renderGraph() {
     node.style.top = `${position.y}px`;
     node.setAttribute(
       "aria-label",
-      `${agent.label}, ${meta.label.toLowerCase()}, ${agent.tool_count} tool calls`,
+      `${agent.label}, ${meta.label.toLowerCase()}, ${agent.tool_count} tool calls, ${formatTokens(agent.token_usage?.total_tokens)} self tokens, ${formatTokens(agent.subtree_token_usage?.total_tokens)} subtree tokens`,
     );
 
     const status = document.createElement("span");
@@ -1187,8 +1283,8 @@ function renderGraph() {
     const count = document.createElement("span");
     count.className = "node-count";
     count.textContent = agent.failed_tool_count
-      ? `${agent.failed_tool_count} failed`
-      : `${agent.tool_count} calls`;
+      ? `${agent.failed_tool_count} failed · ${formatTokens(agent.token_usage?.total_tokens)} / Σ${formatTokens(agent.subtree_token_usage?.total_tokens)}`
+      : `${agent.tool_count} calls · ${formatTokens(agent.token_usage?.total_tokens)} / Σ${formatTokens(agent.subtree_token_usage?.total_tokens)}`;
     const evidence = document.createElement("span");
     evidence.className = "node-state-label";
     evidence.textContent = meta.label;
@@ -1254,6 +1350,7 @@ function renderInspector() {
   const contextEvents = events.filter((event) => ["prompt", "reasoning", "message", "error"].includes(event.kind));
   const toolEvents = events.filter((event) => event.kind === "tool" || event.kind === "tool-result");
   const parent = view.agents.find((item) => item.id === agent.parent_id);
+  const sessionTokens = view.agents.reduce((sum, item) => sum + Number(item.token_usage?.total_tokens ?? 0), 0);
 
   refs.inspectorContent.innerHTML = `
     <div class="inspector-header">
@@ -1262,7 +1359,7 @@ function renderInspector() {
         <strong>${meta.label.toLowerCase()}</strong>
         <span>${escapeHtml(agent.model ?? agent.provider ?? "model unknown")}</span>
       </div>
-      <div class="detail-metrics"><span>◷ ${formatDuration(agent.started_at, agent.last_activity_at)}</span><span>${agent.tool_count} tools</span><span>${agent.detail_level} evidence</span><span>parent ${escapeHtml(parent?.label ?? "root")}</span></div>
+      <div class="detail-metrics"><span>◷ ${formatDuration(agent.started_at, agent.last_activity_at)}</span><span>${agent.tool_count} tools</span><span>self ${formatTokens(agent.token_usage?.total_tokens)}</span><span>subtree Σ${formatTokens(agent.subtree_token_usage?.total_tokens)}</span><span>session ${formatTokens(sessionTokens)}</span><span>in ${Number(agent.token_usage?.input_tokens ?? 0).toLocaleString()} / out ${Number(agent.token_usage?.output_tokens ?? 0).toLocaleString()}</span><span>cached ${Number(agent.token_usage?.cached_input_tokens ?? 0).toLocaleString()}</span><span>${agent.detail_level} evidence</span><span>parent ${escapeHtml(parent?.label ?? "root")}</span></div>
     </div>
     <section class="detail-stream">
       <div class="stream-divider"><span>triggered by</span></div>
@@ -1292,8 +1389,9 @@ function renderTimeline() {
   refs.timelineDate.textContent = formatDate(cursor);
   refs.timelineScrubber.value = String(Math.round((cursorPercent / 100) * 1000));
   refs.cursorState.textContent = cursor >= bounds.end - 1 ? "LATEST STATE" : `HISTORY · ${formatClock(cursor)}`;
-  refs.footerStats.textContent = `${view.agents.length} agents · ${view.agents.reduce((sum, agent) => sum + agent.tool_count, 0)} tools`;
-  refs.timelinePlay.textContent = state.playbackFrame ? "Ⅱ PAUSE" : cursor >= bounds.end - 1 ? "↤ REPLAY" : "▶ PLAY";
+  refs.footerStats.textContent = `${view.agents.length} agents · ${view.agents.reduce((sum, agent) => sum + agent.tool_count, 0)} tools · ${formatTokens(view.agents.reduce((sum, agent) => sum + Number(agent.token_usage?.total_tokens ?? 0), 0))} tokens`;
+  const speedLabel = `${state.playbackRate}×`;
+  refs.timelinePlay.textContent = state.playbackFrame ? `Ⅱ PAUSE ${speedLabel}` : cursor >= bounds.end - 1 ? `↤ REPLAY ${speedLabel}` : `▶ PLAY ${speedLabel}`;
 
   let latest;
   for (let index = state.snapshot.timeline.length - 1; index >= 0; index -= 1) {
@@ -1487,6 +1585,13 @@ function togglePlayback() {
   renderTimeline();
 }
 
+function changePlaybackRate(direction) {
+  state.playbackRate = nextPlaybackRate(state.playbackRate, direction);
+  refs.playbackSpeed.value = String(state.playbackRate);
+  state.playbackLastFrame = null;
+  renderTimeline();
+}
+
 async function beginPlayback() {
   await ensureFullTimeline();
   if (state.snapshot?.timeline_paging?.complete === false) return;
@@ -1533,7 +1638,10 @@ function playbackStep(now) {
   const bounds = timelineBounds(state.snapshot);
   const elapsed = state.playbackLastFrame == null ? 0 : now - state.playbackLastFrame;
   state.playbackLastFrame = now;
-  state.timeCursorMs = Math.min(bounds.end, state.timeCursorMs + elapsed);
+  state.timeCursorMs = Math.min(
+    bounds.end,
+    state.timeCursorMs + scalePlaybackElapsed(elapsed, state.playbackRate),
+  );
   if (state.playbackLastRender == null || now - state.playbackLastRender >= 45) {
     state.playbackLastRender = now;
     render();
@@ -1650,6 +1758,13 @@ function runtimeLabel(runtime) {
 function formatDuration(from, to) {
   if (!from || !to) return "—";
   return formatMillis(Math.max(0, Date.parse(to) - Date.parse(from)));
+}
+
+function formatTokens(value) {
+  const tokens = Math.max(0, Number(value) || 0);
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}m`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  return String(Math.round(tokens));
 }
 
 function formatMillis(value) {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   disableClaudeHooks,
+  deleteSession,
   enableClaudeHooks,
   hexUtf8,
   readCatalog,
@@ -15,6 +16,7 @@ import {
   readRuntimeIntegrationStatus,
   readRunSnapshot,
   readRunTimelinePage,
+  renameSession,
   startManagedIngest,
   startPiAuto,
   startHarnessAuto,
@@ -155,6 +157,21 @@ test("managed ingest lifecycle uses fixed no-argument desktop commands", async (
     ["managed_ingest_status", undefined],
     ["start_managed_ingest", undefined],
     ["stop_managed_ingest", undefined],
+  ]);
+});
+
+test("session controls keep provider identity and credentials inside Tauri", async () => {
+  const calls = [];
+  const run = { runtime: "pi", source_id: "pi-local", root_session_id: "session-1" };
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    return { kind: command === "rename_session" ? "session.renamed" : "session.deleted" };
+  };
+  await renameSession(run, "Research run", { invoke });
+  await deleteSession(run, { invoke });
+  assert.deepEqual(calls, [
+    ["rename_session", { runtime: "pi", sourceId: "pi-local", sessionId: "session-1", label: "Research run" }],
+    ["delete_session", { runtime: "pi", sourceId: "pi-local", sessionId: "session-1" }],
   ]);
 });
 

@@ -46,10 +46,11 @@ for (const [packageName, entrypoint] of [
   ["pi-adapter", "auto-cli.ts"],
   ["dsh-observer", "auto-cli.ts"],
   ["codex-adapter", "auto-cli.ts"],
+  ["antigravity-adapter", "auto-cli.ts"],
 ]) {
   const script = path.join(bundle, "packages", packageName, "src", entrypoint);
   const { stdout } = await execute(process.execPath, [script, "--help"], { env: environment });
   if (!stdout.includes("Usage:")) throw new Error(`${packageName} did not load from the portable bundle`);
 }
 
-console.log(`Verified portable CLI bundle for ${target}: 2 binaries and 4 runtime observers`);
+console.log(`Verified portable CLI bundle for ${target}: 2 binaries and 5 runtime observers`);

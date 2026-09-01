@@ -835,7 +835,7 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .node-duration { grid-row: 1; grid-column: 3; color: var(--text-muted); font-family: "Commit Mono", monospace; font-size: 8px; font-variant-numeric: tabular-nums; }
 .node-provider { grid-row: 2; grid-column: 2 / 4; overflow: hidden; color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .node-activity { grid-row: 3; grid-column: 2; align-self: end; overflow: hidden; color: var(--text-muted); font-family: "Commit Mono", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.node-count { grid-row: 3; grid-column: 3; align-self: end; color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 8px; }
+.node-count { grid-row: 3; grid-column: 3; align-self: end; color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 8px; white-space: nowrap; }
 .node-state-label { position: absolute; top: -8px; right: 9px; padding: 2px 5px; color: var(--text-muted); font-size: 7px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 2px; }
 
 .status-symbol { font-family: "Commit Mono", monospace; font-style: normal; }
@@ -1356,6 +1356,54 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
   .timeline-heading { display: none; }
 }
 
+.session-actions {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  padding: 8px;
+  color: var(--text-dim);
+  font: 9px "Commit Mono", monospace;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-actions button,
+.session-dialog button {
+  padding: 6px 9px;
+  color: var(--text-muted);
+  font: 600 9px "Commit Mono", monospace;
+  letter-spacing: .06em;
+  background: #171814;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.session-actions button:hover { color: var(--accent); border-color: #70611d; }
+.session-actions button:last-child:hover { color: var(--failed); border-color: var(--failed); }
+.session-actions button:disabled { opacity: .35; cursor: not-allowed; }
+
+.session-dialog {
+  width: min(430px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text);
+  background: #1a1b18;
+  border: 1px solid #55574f;
+  box-shadow: 12px 12px 0 rgb(0 0 0 / 38%);
+}
+
+.session-dialog::backdrop { background: rgb(0 0 0 / 70%); backdrop-filter: blur(2px); }
+.session-dialog form { display: grid; gap: 16px; padding: 16px; }
+.session-dialog header, .session-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.session-dialog header button { padding: 2px 7px; }
+.session-dialog h2 { margin: 0; font: 700 16px "Commit Mono", monospace; }
+.session-dialog p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.session-dialog label { display: grid; gap: 6px; color: var(--accent); font: 9px "Commit Mono", monospace; }
+.session-dialog input { padding: 9px 10px; color: var(--text); font: 12px "Commit Mono", monospace; background: #10110f; border: 1px solid var(--border); outline: none; }
+.session-dialog input:focus { border-color: var(--accent); }
+.session-dialog footer { justify-content: flex-end; }
+.session-dialog .session-dialog-submit { color: #111; background: var(--accent); border-color: var(--accent); }
+.session-dialog .session-dialog-submit.danger { color: #fff; background: #8d2931; border-color: var(--failed); }
+.session-dialog .session-dialog-error { color: var(--failed); }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1672,6 +1720,9 @@ body {
 .terminal-status { display: flex; gap: 8px; align-items: center; min-width: 0; color: #666860; border-top: 1px solid #2c2e29; font-size: 7px; }
 .terminal-status > b { align-self: stretch; display: grid; padding: 0 10px; place-items: center; color: #11120d; background: var(--running); font-size: 8px; }
 .terminal-status button { align-self: stretch; padding: 0 8px; color: #15150d; background: #c4a100; border: 0; cursor: pointer; font-size: 7px; }
+.playback-speed { display: flex; align-self: stretch; align-items: center; gap: 4px; padding: 0 5px; color: #777970; font: 7px "Commit Mono", monospace; border-right: 1px solid #33352f; }
+.playback-speed select { height: 100%; padding: 0 14px 0 4px; color: #d7bd32; font: 700 7px "Commit Mono", monospace; background: #191a17; border: 0; border-left: 1px solid #3a3b35; outline: none; cursor: pointer; }
+.playback-speed select:focus-visible { box-shadow: inset 0 0 0 1px var(--running); }
 .terminal-status strong { color: #85867e; font-weight: 500; }
 .terminal-status time { margin-left: auto; }
 .terminal-help { padding-right: 10px; color: #444640; }

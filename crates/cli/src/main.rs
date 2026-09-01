@@ -14,7 +14,9 @@ use std::{
 use chrono::{SecondsFormat, TimeDelta, Utc};
 use orchetrace_core::fold_events;
 use orchetrace_ingest::{IngestStore, RunCatalog, RunSnapshotDelta, RunState};
-use orchetrace_protocol::{CanonicalEvent, CaptureMode, PrivacyPolicy, RuntimeKind};
+use orchetrace_protocol::{
+    CanonicalEvent, CaptureMode, EventType, PrivacyPolicy, RuntimeKind, SCHEMA_VERSION,
+};
 use orchetrace_storage::{
     CheckpointStatus, EventStore, InsertOutcome, RetentionPolicy, StorageDiagnostics,
 };
@@ -541,7 +543,12 @@ fn serve_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         )?;
         Some(endpoint)
     } else {
-        write_live_config(&data_dir, &json!({ "schema_version": 1, "enabled": false }))?;
+        // The terminal TUI deliberately disables WebSocket live updates, but a second
+        // local TUI still needs the 0600-protected token to authenticate control calls.
+        write_live_config(
+            &data_dir,
+            &json!({ "schema_version": 1, "enabled": false, "token": token }),
+        )?;
         None
     };
     println!(
@@ -703,6 +710,185 @@ fn handle_client(
             )?;
             return Ok(());
         }
+        if let Some(control) = parse_session_control(&frame).map_err(|message| {
+            let _ = write_frame(&mut writer, &json!({ "kind": "error", "message": message }));
+            "invalid session control frame"
+        })? {
+            match control {
+                SessionControl::Rename {
+                    runtime,
+                    source_id,
+                    session_id,
+                    label,
+                } => {
+                    let now = Utc::now();
+                    let nonce = now.timestamp_micros().unsigned_abs();
+                    let mut event = CanonicalEvent {
+                        schema_version: SCHEMA_VERSION,
+                        event_id: format!(
+                            "orchetrace:session-rename:{}:{}",
+                            std::process::id(),
+                            nonce
+                        ),
+                        runtime,
+                        source_id,
+                        session_id,
+                        parent_session_id: None,
+                        source_seq: nonce,
+                        observed_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+                        occurred_at: None,
+                        event_type: EventType::SessionMetadataChanged,
+                        data: json!({ "label": label.clone() }),
+                        attributes: BTreeMap::from([(
+                            "orchetrace.annotation".to_owned(),
+                            Value::Bool(true),
+                        )]),
+                        source_ref: None,
+                        supersedes_event_id: None,
+                        ignorable: false,
+                    };
+                    let event_id = event.event_id.clone();
+                    let mut state = state.lock().map_err(|_| "server state lock poisoned")?;
+                    if !session_exists(
+                        &state.ingest.catalog(),
+                        &event.runtime,
+                        &event.source_id,
+                        &event.session_id,
+                    ) {
+                        write_frame(
+                            &mut writer,
+                            &json!({ "kind": "error", "message": "session was not found" }),
+                        )?;
+                        continue;
+                    }
+                    state.privacy_policy.sanitize_event(&mut event);
+                    let outcome = state.ingest.ingest(event.clone())?;
+                    let durable_outcome = state.storage.insert_event(&event)?;
+                    if durable_outcome == InsertOutcome::Inserted
+                        && let Some(events_path) = events_path
+                    {
+                        append_event(events_path, &event)?;
+                    }
+                    let durable_event_count = state.storage.event_count()?;
+                    if durable_outcome == InsertOutcome::Inserted {
+                        let catalog = state.ingest.catalog();
+                        state.storage.save_checkpoint(
+                            &outcome.updated_runs,
+                            &catalog,
+                            durable_event_count,
+                        )?;
+                        persist_run_data(
+                            data_dir,
+                            &outcome.updated_runs,
+                            &outcome.run_deltas,
+                            &catalog,
+                            &outcome.removed_run_ids,
+                        )?;
+                        if let (Some(path), Some(run)) =
+                            (legacy_snapshot_path, latest_run(&outcome.runs))
+                        {
+                            write_json_atomic(path, &run.snapshot)?;
+                        }
+                        live_hub.broadcast(&json!({
+                            "kind": "catalog.updated",
+                            "protocol": 1,
+                            "run_count": outcome.runs.len(),
+                            "pending_event_count": outcome.pending_event_count,
+                            "durable_event_count": durable_event_count,
+                            "delta_schema_version": 1,
+                            "updated_run_ids": outcome.updated_runs.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
+                            "removed_run_ids": &outcome.removed_run_ids
+                        }))?;
+                    }
+                    drop(state);
+                    write_frame(
+                        &mut writer,
+                        &json!({
+                            "kind": "session.renamed",
+                            "protocol": 1,
+                            "event_id": event_id,
+                            "label": label
+                        }),
+                    )?;
+                    continue;
+                }
+                SessionControl::Delete {
+                    runtime,
+                    source_id,
+                    session_id,
+                } => {
+                    let mut state = state.lock().map_err(|_| "server state lock poisoned")?;
+                    let previous_catalog = state.ingest.catalog();
+                    if !session_exists(&previous_catalog, &runtime, &source_id, &session_id) {
+                        write_frame(
+                            &mut writer,
+                            &json!({ "kind": "error", "message": "session was not found" }),
+                        )?;
+                        continue;
+                    }
+                    let deletion =
+                        state
+                            .storage
+                            .delete_session_tree(&runtime, &source_id, &session_id)?;
+                    let projection =
+                        state
+                            .ingest
+                            .delete_session_tree(&runtime, &source_id, &session_id)?;
+                    debug_assert_eq!(projection.deleted_events, deletion.deleted_events);
+                    debug_assert_eq!(projection.deleted_sessions, deletion.deleted_sessions);
+                    let catalog = state.ingest.catalog();
+                    let durable_event_count = state.ingest.len();
+                    state.storage.save_checkpoint(
+                        &projection.updated_runs,
+                        &catalog,
+                        durable_event_count,
+                    )?;
+                    persist_run_data(
+                        data_dir,
+                        &projection.updated_runs,
+                        &[],
+                        &catalog,
+                        &projection.removed_run_ids,
+                    )?;
+                    if let Some(path) = events_path {
+                        let events = state.storage.load_events()?;
+                        rewrite_events(path, &events)?;
+                    }
+                    if let Some(path) = legacy_snapshot_path {
+                        let runs = state.ingest.runs();
+                        if let Some(run) = latest_run(&runs) {
+                            write_json_atomic(path, &run.snapshot)?;
+                        } else if let Err(error) = fs::remove_file(path)
+                            && error.kind() != std::io::ErrorKind::NotFound
+                        {
+                            return Err(error.into());
+                        }
+                    }
+                    live_hub.broadcast(&json!({
+                        "kind": "catalog.updated",
+                        "protocol": 1,
+                        "run_count": catalog.runs.len(),
+                        "pending_event_count": catalog.pending_event_count,
+                        "durable_event_count": durable_event_count,
+                        "delta_schema_version": 1,
+                        "updated_run_ids": projection.updated_runs.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
+                        "removed_run_ids": &projection.removed_run_ids
+                    }))?;
+                    drop(state);
+                    write_frame(
+                        &mut writer,
+                        &json!({
+                            "kind": "session.deleted",
+                            "protocol": 1,
+                            "deleted_sessions": deletion.deleted_sessions,
+                            "deleted_events": deletion.deleted_events,
+                            "remaining_runs": catalog.runs.len()
+                        }),
+                    )?;
+                    continue;
+                }
+            }
+        }
         let mut event: CanonicalEvent = match serde_json::from_value(frame) {
             Ok(event) => event,
             Err(error) => {
@@ -801,6 +987,76 @@ fn read_line_until_shutdown(
 fn is_shutdown_frame(frame: &Value) -> bool {
     frame.get("kind").and_then(Value::as_str) == Some("control.shutdown")
         && frame.get("protocol").and_then(Value::as_u64) == Some(1)
+}
+
+#[derive(Debug, PartialEq)]
+enum SessionControl {
+    Rename {
+        runtime: RuntimeKind,
+        source_id: String,
+        session_id: String,
+        label: String,
+    },
+    Delete {
+        runtime: RuntimeKind,
+        source_id: String,
+        session_id: String,
+    },
+}
+
+fn parse_session_control(frame: &Value) -> Result<Option<SessionControl>, String> {
+    let Some(kind) = frame.get("kind").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if !matches!(kind, "control.session.rename" | "control.session.delete") {
+        return Ok(None);
+    }
+    if frame.get("protocol").and_then(Value::as_u64) != Some(1) {
+        return Err("unsupported session control protocol".into());
+    }
+    let field = |name: &str| {
+        frame
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("missing {name}"))
+    };
+    let runtime = RuntimeKind::from_slug(field("runtime")?);
+    let source_id = field("source_id")?;
+    let session_id = field("session_id")?;
+    if kind == "control.session.delete" {
+        return Ok(Some(SessionControl::Delete {
+            runtime,
+            source_id,
+            session_id,
+        }));
+    }
+    let label = field("label")?;
+    if label.chars().count() > 80 {
+        return Err("session label must contain at most 80 characters".into());
+    }
+    if label.chars().any(char::is_control) {
+        return Err("session label may not contain control characters".into());
+    }
+    Ok(Some(SessionControl::Rename {
+        runtime,
+        source_id,
+        session_id,
+        label,
+    }))
+}
+
+fn session_exists(
+    catalog: &RunCatalog,
+    runtime: &RuntimeKind,
+    source_id: &str,
+    session_id: &str,
+) -> bool {
+    catalog.runs.iter().any(|run| {
+        &run.runtime == runtime && run.source_id == source_id && run.root_session_id == session_id
+    })
 }
 
 struct ServerState {
@@ -1313,9 +1569,9 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_diagnostic_bundle, decode_zstd, diagnostics_command, doctor_command,
-        encode_file_component, events_for_run, export_command, is_shutdown_frame, persist_run_data,
-        repair_command,
+        SessionControl, build_diagnostic_bundle, decode_zstd, diagnostics_command, doctor_command,
+        encode_file_component, events_for_run, export_command, is_shutdown_frame,
+        parse_session_control, persist_run_data, repair_command,
     };
     use orchetrace_ingest::{RunCatalog, RunState};
     use orchetrace_protocol::{CanonicalEvent, EventType, RuntimeKind};
@@ -1358,6 +1614,48 @@ mod tests {
         assert!(!is_shutdown_frame(
             &json!({ "kind": "event", "protocol": 1 })
         ));
+    }
+
+    #[test]
+    fn session_controls_are_strict_and_preserve_unicode_labels() {
+        assert_eq!(
+            parse_session_control(&json!({
+                "kind": "control.session.rename",
+                "protocol": 1,
+                "runtime": "pi",
+                "source_id": "local",
+                "session_id": "root",
+                "label": "  研究链路  "
+            }))
+            .unwrap(),
+            Some(SessionControl::Rename {
+                runtime: RuntimeKind::Pi,
+                source_id: "local".into(),
+                session_id: "root".into(),
+                label: "研究链路".into(),
+            })
+        );
+        assert!(
+            parse_session_control(&json!({
+                "kind": "control.session.delete",
+                "protocol": 2,
+                "runtime": "pi",
+                "source_id": "local",
+                "session_id": "root"
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_session_control(&json!({
+                "kind": "control.session.rename",
+                "protocol": 1,
+                "runtime": "pi",
+                "source_id": "local",
+                "session_id": "root",
+                "label": "\n"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
