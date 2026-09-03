@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use orchetrace_storage::{EventStore, StorageDiagnostics};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::Manager;
@@ -19,6 +20,7 @@ use runtime_observer::{ManagedRuntimeObserver, RuntimeObserverConfig, RuntimeObs
 #[derive(Debug)]
 struct DesktopState {
     data_dir: PathBuf,
+    database_path: PathBuf,
     legacy_snapshot: PathBuf,
     ingest: ManagedIngest,
     claude: ManagedClaude,
@@ -34,6 +36,14 @@ struct DesktopInfo {
     native_catalog: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopStorageStatus {
+    phase: &'static str,
+    database_path: String,
+    diagnostics: Option<StorageDiagnostics>,
+    message: Option<String>,
+}
+
 #[tauri::command]
 fn desktop_info(state: tauri::State<'_, DesktopState>) -> DesktopInfo {
     DesktopInfo {
@@ -43,6 +53,42 @@ fn desktop_info(state: tauri::State<'_, DesktopState>) -> DesktopInfo {
         data_dir: state.data_dir.display().to_string(),
         native_catalog: state.data_dir.join("run-catalog.json").is_file(),
     }
+}
+
+#[tauri::command]
+async fn storage_diagnostics(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopStorageStatus, String> {
+    let database_path = state.database_path.clone();
+    tauri::async_runtime::spawn_blocking(move || diagnose_storage(&database_path))
+        .await
+        .map_err(|error| format!("storage doctor task failed: {error}"))?
+}
+
+fn diagnose_storage(database_path: &Path) -> Result<DesktopStorageStatus, String> {
+    if !database_path.is_file() {
+        return Ok(DesktopStorageStatus {
+            phase: "empty",
+            database_path: database_path.display().to_string(),
+            diagnostics: None,
+            message: Some("The canonical event database has not been created yet.".to_owned()),
+        });
+    }
+    let storage = EventStore::open(database_path).map_err(|error| error.to_string())?;
+    let diagnostics = storage.diagnose().map_err(|error| error.to_string())?;
+    let phase = if diagnostics.has_errors() {
+        "error"
+    } else if diagnostics.issues.is_empty() {
+        "healthy"
+    } else {
+        "warning"
+    };
+    Ok(DesktopStorageStatus {
+        phase,
+        database_path: database_path.display().to_string(),
+        diagnostics: Some(diagnostics),
+        message: None,
+    })
 }
 
 #[tauri::command]
@@ -496,10 +542,11 @@ pub fn run() {
                         app_data_dir.join("run-snapshot.json")
                     }
                 });
+            let database_path = app_data_dir.join("orchetrace.db");
             let ingest = ManagedIngest::new(IngestConfig {
                 cli_path: resolve_cli_path(&resource_dir),
                 data_dir: data_dir.clone(),
-                database_path: app_data_dir.join("orchetrace.db"),
+                database_path: database_path.clone(),
                 ingest_endpoint: "127.0.0.1:43117".to_owned(),
                 live_endpoint: "127.0.0.1:43118".to_owned(),
                 web_origin: desktop_web_origin(),
@@ -555,6 +602,7 @@ pub fn run() {
             }
             app.manage(DesktopState {
                 data_dir,
+                database_path,
                 legacy_snapshot,
                 ingest,
                 claude,
@@ -564,6 +612,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_info,
+            storage_diagnostics,
             read_catalog,
             read_run_snapshot,
             read_run_delta,
@@ -599,7 +648,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{packaged_executable, read_json, resolve_adapter_entry, run_file};
+    use super::{
+        diagnose_storage, packaged_executable, read_json, resolve_adapter_entry, run_file,
+    };
+    use orchetrace_storage::EventStore;
     use serde_json::json;
     use std::{
         fs,
@@ -646,6 +698,28 @@ mod tests {
             read_json(&directory.join("missing.json"))
                 .expect_err("missing file should fail")
                 .contains("missing.json")
+        );
+
+        fs::remove_dir_all(directory).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn storage_diagnostics_distinguish_an_empty_install_from_a_healthy_database() {
+        let directory = temp_dir();
+        let database = directory.join("orchetrace.db");
+        let empty = diagnose_storage(&database).expect("missing database should be a valid state");
+        assert_eq!(empty.phase, "empty");
+        assert!(empty.diagnostics.is_none());
+
+        drop(EventStore::open(&database).expect("database should initialize"));
+        let healthy = diagnose_storage(&database).expect("database should be diagnosed");
+        assert_eq!(healthy.phase, "healthy");
+        assert_eq!(
+            healthy
+                .diagnostics
+                .expect("diagnostics should be present")
+                .event_count,
+            0
         );
 
         fs::remove_dir_all(directory).expect("temp directory should be removed");

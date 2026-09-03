@@ -402,6 +402,66 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .runtime-facts dt { color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 7px; letter-spacing: .08em; }
 .runtime-facts dd { overflow: hidden; margin: 6px 0 0; color: var(--text-muted); font-family: "Commit Mono", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
+.storage-doctor {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 15px 20px 17px;
+  overflow: hidden;
+  background:
+    linear-gradient(115deg, rgb(72 201 151 / 5%), transparent 48%),
+    rgb(7 13 18 / 45%);
+  border-bottom: 1px solid var(--border);
+}
+
+.storage-doctor::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 54px;
+  height: 54px;
+  background: linear-gradient(135deg, transparent 49%, rgb(72 201 151 / 13%) 50%, transparent 52%);
+  content: "";
+  pointer-events: none;
+}
+
+.storage-doctor-phase { letter-spacing: .08em; }
+.storage-doctor-phase.healthy { color: var(--succeeded); }
+.storage-doctor-phase.warning { color: var(--running); }
+.storage-doctor-phase.error { color: var(--failed); }
+.storage-doctor-phase.empty,
+.storage-doctor-phase.unchecked,
+.storage-doctor-phase.browser { color: var(--text-dim); }
+
+.storage-doctor-lead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; margin-top: 11px; }
+.storage-doctor-lead p { margin: 0; color: var(--text-dim); font-size: 8px; line-height: 1.55; }
+.storage-doctor-lead button {
+  height: 27px;
+  padding: 0 9px;
+  color: var(--succeeded);
+  font-family: "Commit Mono", monospace;
+  font-size: 7px;
+  letter-spacing: .05em;
+  background: rgb(72 201 151 / 5%);
+  border: 1px solid rgb(72 201 151 / 28%);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.storage-doctor-lead button:hover:not(:disabled) { background: rgb(72 201 151 / 10%); border-color: var(--succeeded); }
+.storage-doctor-lead button:disabled { opacity: .45; cursor: wait; }
+
+.storage-doctor-metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin: 13px 0 0; border: 1px solid var(--border-soft); }
+.storage-doctor-metrics div { min-width: 0; padding: 8px 9px; border-right: 1px solid var(--border-soft); }
+.storage-doctor-metrics div:last-child { border-right: 0; }
+.storage-doctor-metrics dt { color: var(--text-dim); font-family: "Commit Mono", monospace; font-size: 6px; letter-spacing: .08em; }
+.storage-doctor-metrics dd { overflow: hidden; margin: 5px 0 0; color: var(--text-muted); font-family: "Commit Mono", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.storage-doctor-path { display: block; overflow: hidden; margin-top: 9px; color: #58606a; font-family: "Commit Mono", monospace; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.storage-doctor-list { display: grid; gap: 5px; padding: 0; margin: 9px 0 0; list-style: none; }
+.storage-doctor-list li { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; color: #b7a45d; font-family: "Commit Mono", monospace; font-size: 7px; line-height: 1.45; }
+.storage-doctor-list li b { overflow: hidden; color: var(--running); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.storage-doctor-list li span { overflow-wrap: anywhere; }
+.storage-doctor-list li.severity-error,
+.storage-doctor-list li.severity-error b { color: var(--failed); }
+
 .runtime-observers {
   padding: 15px 20px 17px;
   background:

@@ -10,6 +10,7 @@ import {
   readClaudeIntegrationStatus,
   readDesktopInfo,
   readManagedIngestStatus,
+  readStorageDiagnostics,
   readPiIntegrationStatus,
   readHarnessIntegrationStatus,
   readCodexIntegrationStatus,
@@ -158,6 +159,19 @@ test("managed ingest lifecycle uses fixed no-argument desktop commands", async (
     ["start_managed_ingest", undefined],
     ["stop_managed_ingest", undefined],
   ]);
+});
+
+test("storage doctor remains a read-only desktop command", async () => {
+  const calls = [];
+  const status = await readStorageDiagnostics({
+    invoke: async (command, args) => {
+      calls.push([command, args]);
+      return { phase: "healthy", diagnostics: { event_count: 12 } };
+    },
+  });
+  assert.equal(status.diagnostics.event_count, 12);
+  assert.deepEqual(calls, [["storage_diagnostics", undefined]]);
+  assert.equal(await readStorageDiagnostics({ invoke: null }), null);
 });
 
 test("session controls keep provider identity and credentials inside Tauri", async () => {

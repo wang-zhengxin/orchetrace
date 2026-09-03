@@ -22,6 +22,7 @@ import {
   readHarnessIntegrationStatus,
   readCodexIntegrationStatus,
   readManagedIngestStatus,
+  readStorageDiagnostics,
   readPiIntegrationStatus,
   readRunDelta,
   readRunSnapshot,
@@ -85,6 +86,8 @@ const state = {
   runtimeDrawerOpen: false,
   runtimePollTimer: null,
   runtimeBusy: false,
+  storageDiagnostics: null,
+  storageBusy: false,
   timeCursorMs: null,
   cursorPinned: false,
   detailOpen: false,
@@ -174,6 +177,15 @@ const refs = Object.fromEntries(
     "runtime-live-endpoint",
     "runtime-pid",
     "runtime-data-dir",
+    "storage-doctor-phase",
+    "storage-doctor-action",
+    "storage-doctor-summary",
+    "storage-doctor-events",
+    "storage-doctor-schema",
+    "storage-doctor-checkpoint",
+    "storage-doctor-issues",
+    "storage-doctor-path",
+    "storage-doctor-list",
     "runtime-token-value",
     "runtime-token-copy",
     "runtime-source-grid",
@@ -215,6 +227,7 @@ async function initializeShell() {
     renderPassiveIntegration("pi", null);
     renderPassiveIntegration("harness", null);
     renderPassiveIntegration("codex", null);
+    renderStorageDiagnostics(null);
     return;
   }
   document.documentElement.dataset.shell = info.shell;
@@ -250,6 +263,7 @@ function wireInteractions() {
   refs.harnessAutoAction.addEventListener("click", () => void togglePassiveObserver("harness"));
   refs.codexAutoAction.addEventListener("click", () => void togglePassiveObserver("codex"));
   refs.runtimeTokenCopy.addEventListener("click", () => void copyManagedToken());
+  refs.storageDoctorAction.addEventListener("click", () => void refreshStorageDiagnostics());
   refs.timelineScrubber.addEventListener("input", () => {
     if (!state.snapshot) return;
     stopPlayback();
@@ -318,8 +332,32 @@ function openRuntimeDrawer() {
   refs.drawerScrim.hidden = false;
   refs.connectionHealth.setAttribute("aria-expanded", "true");
   void refreshManagedIngest();
+  void refreshStorageDiagnostics();
   if (!state.runtimePollTimer) {
     state.runtimePollTimer = setInterval(() => void refreshManagedIngest(), 1500);
+  }
+}
+
+async function refreshStorageDiagnostics() {
+  if (state.storageBusy) return;
+  if (!state.desktopInfo) {
+    renderStorageDiagnostics(null);
+    return;
+  }
+  state.storageBusy = true;
+  renderStorageDiagnostics(state.storageDiagnostics);
+  try {
+    state.storageDiagnostics = await readStorageDiagnostics();
+  } catch (error) {
+    state.storageDiagnostics = {
+      phase: "error",
+      diagnostics: null,
+      message: String(error),
+      database_path: "—",
+    };
+  } finally {
+    state.storageBusy = false;
+    renderStorageDiagnostics(state.storageDiagnostics);
   }
 }
 
@@ -527,6 +565,56 @@ function renderManagedIngest(status) {
   refs.runtimeTokenCopy.disabled = !token;
   renderRuntimeSources();
   renderRuntimeLogs(mergedRuntimeLogs());
+}
+
+function renderStorageDiagnostics(status) {
+  const phase = status?.phase ?? (state.desktopInfo ? "unchecked" : "browser");
+  const labels = {
+    healthy: "HEALTHY",
+    warning: "ATTENTION",
+    error: "ERROR",
+    empty: "NO DATABASE",
+    unchecked: "NOT CHECKED",
+    browser: "DESKTOP ONLY",
+  };
+  refs.storageDoctorPhase.className = `storage-doctor-phase ${phase}`;
+  refs.storageDoctorPhase.textContent = labels[phase] ?? phase.toUpperCase();
+  refs.storageDoctorAction.hidden = phase === "browser";
+  refs.storageDoctorAction.disabled = state.storageBusy;
+  refs.storageDoctorAction.textContent = state.storageBusy ? "CHECKING…" : "CHECK NOW";
+
+  const diagnostics = status?.diagnostics;
+  const summaries = {
+    healthy: "Canonical facts, SQLite integrity, indexes, and derived checkpoints are consistent.",
+    warning: "Canonical facts are intact, but disposable derived state needs attention.",
+    error: "Canonical facts or SQLite integrity failed validation. Do not run repair before backing up the database.",
+    empty: status?.message ?? "The canonical event database will be created with the first observed event.",
+    unchecked: "Run a read-only integrity check against the local canonical event database.",
+    browser: "Storage diagnostics are available in the Tauri desktop shell.",
+  };
+  refs.storageDoctorSummary.textContent = phase === "error" && !diagnostics && status?.message
+    ? status.message
+    : summaries[phase] ?? status?.message ?? "Storage status is unavailable.";
+  refs.storageDoctorEvents.textContent = diagnostics ? String(diagnostics.event_count) : "—";
+  refs.storageDoctorSchema.textContent = diagnostics ? `v${diagnostics.schema_version}` : "—";
+  refs.storageDoctorCheckpoint.textContent = diagnostics?.checkpoint_status?.toUpperCase() ?? "—";
+  const issueCount = diagnostics
+    ? diagnostics.issues.length + Number(diagnostics.truncated_issue_count ?? 0)
+    : 0;
+  refs.storageDoctorIssues.textContent = diagnostics ? String(issueCount) : "—";
+  refs.storageDoctorPath.textContent = status?.database_path ?? "—";
+  refs.storageDoctorPath.title = refs.storageDoctorPath.textContent;
+  refs.storageDoctorList.replaceChildren();
+  for (const issue of diagnostics?.issues?.slice(0, 4) ?? []) {
+    const item = document.createElement("li");
+    item.className = `severity-${issue.severity ?? "warning"}`;
+    const code = document.createElement("b");
+    code.textContent = issue.code;
+    const message = document.createElement("span");
+    message.textContent = issue.message;
+    item.append(code, message);
+    refs.storageDoctorList.append(item);
+  }
 }
 
 function renderClaudeIntegration(status) {

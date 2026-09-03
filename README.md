@@ -422,6 +422,8 @@ npm run benchmark:adapter-tail
 
 当前测试集覆盖 Adapter 映射、byte-range 追加读、文件截断/替换、断线重放、有界 ACK 流水线与 socket 背压、cursor 恢复、乱序 fold、SQLite checkpoint 原始缓存恢复、timeline 分页、delta 合并、Web/Desktop bridge 和真实 sidecar 生命周期。
 
+Tauri 的 Runtime Diagnostics 还提供只读 `Storage Doctor`：按需检查 SQLite integrity、外键、Canonical Event payload、索引一致性和 checkpoint 状态。该检查不会停止 Ingest、修改事实或自动执行修复；需要维护时仍使用下方的 `otrace repair` / `otrace export` 命令。
+
 ## 仓库结构
 
 ```text

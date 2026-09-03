@@ -39,6 +39,10 @@ export function readManagedIngestStatus(options = {}) {
   return invokeDesktop("managed_ingest_status", options);
 }
 
+export function readStorageDiagnostics(options = {}) {
+  return invokeDesktop("storage_diagnostics", options);
+}
+
 export function startManagedIngest(options = {}) {
   return invokeDesktop("start_managed_ingest", options);
 }

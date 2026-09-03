@@ -2434,6 +2434,7 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
  "orchetrace-protocol",
+ "orchetrace-storage",
  "serde",
  "serde_json",
  "tauri",

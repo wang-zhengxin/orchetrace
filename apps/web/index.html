@@ -114,6 +114,14 @@
         <div><dt>DATA</dt><dd id="runtime-data-dir">—</dd></div>
       </dl>
 
+      <section class="storage-doctor">
+        <div class="runtime-section-heading"><span class="eyebrow">STORAGE DOCTOR</span><small class="storage-doctor-phase unchecked" id="storage-doctor-phase">NOT CHECKED</small></div>
+        <div class="storage-doctor-lead"><p id="storage-doctor-summary">Run a read-only integrity check against the local canonical event database.</p><button id="storage-doctor-action" type="button">CHECK NOW</button></div>
+        <dl class="storage-doctor-metrics"><div><dt>EVENTS</dt><dd id="storage-doctor-events">—</dd></div><div><dt>SCHEMA</dt><dd id="storage-doctor-schema">—</dd></div><div><dt>CHECKPOINT</dt><dd id="storage-doctor-checkpoint">—</dd></div><div><dt>ISSUES</dt><dd id="storage-doctor-issues">—</dd></div></dl>
+        <code class="storage-doctor-path" id="storage-doctor-path">—</code>
+        <ol class="storage-doctor-list" id="storage-doctor-list"></ol>
+      </section>
+
       <section class="runtime-observers">
         <div class="runtime-section-heading">
           <span class="eyebrow">AGENT RECEIVERS</span>
