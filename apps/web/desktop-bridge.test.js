@@ -5,12 +5,14 @@ import {
   disableClaudeHooks,
   deleteSession,
   enableClaudeHooks,
+  exportRun,
   hexUtf8,
   readCatalog,
   readClaudeIntegrationStatus,
   readDesktopInfo,
   readManagedIngestStatus,
   readStorageDiagnostics,
+  repairStorage,
   readPiIntegrationStatus,
   readHarnessIntegrationStatus,
   readCodexIntegrationStatus,
@@ -172,6 +174,21 @@ test("storage doctor remains a read-only desktop command", async () => {
   assert.equal(status.diagnostics.event_count, 12);
   assert.deepEqual(calls, [["storage_diagnostics", undefined]]);
   assert.equal(await readStorageDiagnostics({ invoke: null }), null);
+});
+
+test("storage maintenance commands expose no arbitrary database or output path", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    return { message: "done", output_path: command === "export_run" ? "/managed/export.jsonl" : null };
+  };
+  await repairStorage({ invoke });
+  await exportRun({ run_id: "runtime:source:session" }, { invoke });
+  assert.deepEqual(calls, [
+    ["repair_storage", undefined],
+    ["export_run", { runId: "runtime:source:session" }],
+  ]);
+  assert.equal(await repairStorage({ invoke: null }), null);
 });
 
 test("session controls keep provider identity and credentials inside Tauri", async () => {

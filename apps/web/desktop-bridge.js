@@ -43,6 +43,14 @@ export function readStorageDiagnostics(options = {}) {
   return invokeDesktop("storage_diagnostics", options);
 }
 
+export function repairStorage(options = {}) {
+  return invokeDesktop("repair_storage", options);
+}
+
+export function exportRun(run, options = {}) {
+  return invokeDesktop("export_run", options, { runId: run.run_id });
+}
+
 export function startManagedIngest(options = {}) {
   return invokeDesktop("start_managed_ingest", options);
 }

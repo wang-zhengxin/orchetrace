@@ -432,9 +432,10 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .storage-doctor-phase.unchecked,
 .storage-doctor-phase.browser { color: var(--text-dim); }
 
-.storage-doctor-lead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; margin-top: 11px; }
+.storage-doctor-lead { margin-top: 11px; }
 .storage-doctor-lead p { margin: 0; color: var(--text-dim); font-size: 8px; line-height: 1.55; }
-.storage-doctor-lead button {
+.storage-doctor-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 11px; }
+.storage-doctor-actions button {
   height: 27px;
   padding: 0 9px;
   color: var(--succeeded);
@@ -446,8 +447,10 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
   border-radius: 2px;
   cursor: pointer;
 }
-.storage-doctor-lead button:hover:not(:disabled) { background: rgb(72 201 151 / 10%); border-color: var(--succeeded); }
-.storage-doctor-lead button:disabled { opacity: .45; cursor: wait; }
+.storage-doctor-actions button:hover:not(:disabled) { background: rgb(72 201 151 / 10%); border-color: var(--succeeded); }
+.storage-doctor-actions button:disabled { opacity: .32; cursor: not-allowed; }
+#storage-repair-action:not(:disabled) { color: var(--running); background: rgb(226 192 68 / 5%); border-color: rgb(226 192 68 / 30%); }
+#storage-repair-action:not(:disabled):hover { border-color: var(--running); }
 
 .storage-doctor-metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin: 13px 0 0; border: 1px solid var(--border-soft); }
 .storage-doctor-metrics div { min-width: 0; padding: 8px 9px; border-right: 1px solid var(--border-soft); }
@@ -461,6 +464,11 @@ html[data-shell="tauri"][data-platform="macos"] .brand {
 .storage-doctor-list li span { overflow-wrap: anywhere; }
 .storage-doctor-list li.severity-error,
 .storage-doctor-list li.severity-error b { color: var(--failed); }
+.storage-doctor-result { padding: 7px 8px; margin: 10px 0 0; color: var(--text-muted); font-family: "Commit Mono", monospace; font-size: 7px; line-height: 1.5; overflow-wrap: anywhere; background: rgb(106 169 255 / 5%); border-left: 2px solid var(--focus); }
+.storage-doctor-result.warning { color: #c2af69; border-left-color: var(--running); }
+.storage-doctor-result.success { color: #83caaa; border-left-color: var(--succeeded); }
+.storage-doctor-result.error { color: #d78b7e; border-left-color: var(--failed); }
+.storage-doctor-result.working { color: var(--focus); animation: signal-pulse 900ms ease-in-out infinite alternate; }
 
 .runtime-observers {
   padding: 15px 20px 17px;

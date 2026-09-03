@@ -14,6 +14,7 @@ import {
   disableClaudeHooks,
   deleteSession,
   enableClaudeHooks,
+  exportRun,
   readCatalog,
   readClaudeIntegrationStatus,
   readDesktopInfo,
@@ -23,6 +24,7 @@ import {
   readCodexIntegrationStatus,
   readManagedIngestStatus,
   readStorageDiagnostics,
+  repairStorage,
   readPiIntegrationStatus,
   readRunDelta,
   readRunSnapshot,
@@ -88,6 +90,9 @@ const state = {
   runtimeBusy: false,
   storageDiagnostics: null,
   storageBusy: false,
+  storageRepairArmed: false,
+  storageRepairTimer: null,
+  storageResult: null,
   timeCursorMs: null,
   cursorPinned: false,
   detailOpen: false,
@@ -179,6 +184,8 @@ const refs = Object.fromEntries(
     "runtime-data-dir",
     "storage-doctor-phase",
     "storage-doctor-action",
+    "storage-repair-action",
+    "storage-export-action",
     "storage-doctor-summary",
     "storage-doctor-events",
     "storage-doctor-schema",
@@ -186,6 +193,7 @@ const refs = Object.fromEntries(
     "storage-doctor-issues",
     "storage-doctor-path",
     "storage-doctor-list",
+    "storage-doctor-result",
     "runtime-token-value",
     "runtime-token-copy",
     "runtime-source-grid",
@@ -264,6 +272,8 @@ function wireInteractions() {
   refs.codexAutoAction.addEventListener("click", () => void togglePassiveObserver("codex"));
   refs.runtimeTokenCopy.addEventListener("click", () => void copyManagedToken());
   refs.storageDoctorAction.addEventListener("click", () => void refreshStorageDiagnostics());
+  refs.storageRepairAction.addEventListener("click", () => void repairManagedStorage());
+  refs.storageExportAction.addEventListener("click", () => void exportCurrentRun());
   refs.timelineScrubber.addEventListener("input", () => {
     if (!state.snapshot) return;
     stopPlayback();
@@ -373,6 +383,72 @@ function closeRuntimeDrawer() {
 function stopRuntimePolling() {
   if (state.runtimePollTimer) clearInterval(state.runtimePollTimer);
   state.runtimePollTimer = null;
+}
+
+function disarmStorageRepair() {
+  state.storageRepairArmed = false;
+  if (state.storageRepairTimer) clearTimeout(state.storageRepairTimer);
+  state.storageRepairTimer = null;
+}
+
+function armStorageRepair() {
+  state.storageRepairArmed = true;
+  state.storageResult = {
+    phase: "warning",
+    message: "Repair armed for 5 seconds. Confirm to rebuild disposable checkpoints and projections.",
+  };
+  if (state.storageRepairTimer) clearTimeout(state.storageRepairTimer);
+  state.storageRepairTimer = setTimeout(() => {
+    disarmStorageRepair();
+    state.storageResult = null;
+    renderStorageDiagnostics(state.storageDiagnostics);
+  }, 5_000);
+  renderStorageDiagnostics(state.storageDiagnostics);
+}
+
+async function repairManagedStorage() {
+  if (state.storageBusy || state.storageDiagnostics?.phase !== "warning") return;
+  if (!state.storageRepairArmed) {
+    armStorageRepair();
+    return;
+  }
+  disarmStorageRepair();
+  state.storageBusy = true;
+  state.storageResult = { phase: "working", message: "Rebuilding derived storage…" };
+  renderStorageDiagnostics(state.storageDiagnostics);
+  try {
+    const outcome = await repairStorage();
+    state.storageResult = { phase: "success", message: outcome.message };
+    state.storageBusy = false;
+    await refreshStorageDiagnostics();
+    await refreshCatalog(false);
+  } catch (error) {
+    state.storageResult = { phase: "error", message: String(error) };
+  } finally {
+    state.storageBusy = false;
+    renderStorageDiagnostics(state.storageDiagnostics);
+  }
+}
+
+async function exportCurrentRun() {
+  const run = currentRunSummary();
+  if (state.storageBusy || !run) return;
+  disarmStorageRepair();
+  state.storageBusy = true;
+  state.storageResult = { phase: "working", message: "Exporting the selected Run…" };
+  renderStorageDiagnostics(state.storageDiagnostics);
+  try {
+    const outcome = await exportRun(run);
+    state.storageResult = {
+      phase: "success",
+      message: outcome.output_path ? `Exported to ${outcome.output_path}` : outcome.message,
+    };
+  } catch (error) {
+    state.storageResult = { phase: "error", message: String(error) };
+  } finally {
+    state.storageBusy = false;
+    renderStorageDiagnostics(state.storageDiagnostics);
+  }
 }
 
 async function refreshManagedIngest() {
@@ -615,6 +691,16 @@ function renderStorageDiagnostics(status) {
     item.append(code, message);
     refs.storageDoctorList.append(item);
   }
+  const repairable = phase === "warning" && state.managedIngest?.phase !== "running";
+  refs.storageRepairAction.hidden = phase === "browser";
+  refs.storageRepairAction.disabled = state.storageBusy || !repairable;
+  refs.storageRepairAction.textContent = state.storageRepairArmed ? "CONFIRM REPAIR" : "ARM REPAIR";
+  const exportable = ["healthy", "warning"].includes(phase) && Boolean(currentRunSummary());
+  refs.storageExportAction.hidden = phase === "browser";
+  refs.storageExportAction.disabled = state.storageBusy || !exportable;
+  refs.storageDoctorResult.hidden = !state.storageResult;
+  refs.storageDoctorResult.className = `storage-doctor-result ${state.storageResult?.phase ?? ""}`;
+  refs.storageDoctorResult.textContent = state.storageResult?.message ?? "";
 }
 
 function renderClaudeIntegration(status) {

@@ -205,7 +205,7 @@ Runtime Diagnostics 会将进程和 Adapter 状态聚合为：
 
 诊断记录包含 severity、code、location 和 message，可用于定位哪个会话文件、RPC 记录或传输端点发生问题。
 
-抽屉中的 `Storage Doctor` 是按需执行的只读检查，展示 Canonical Event 数量、Schema、checkpoint 和问题数量，并列出最多四条关键诊断。它不会自动运行 `repair`，也不会修改正在写入的数据库。
+抽屉中的 `Storage Doctor` 是按需执行的只读检查，展示 Canonical Event 数量、Schema、checkpoint 和问题数量，并列出最多四条关键诊断。只有检查结果属于可修复的派生状态且 Ingest 已停止时，`ARM REPAIR` 才会启用；五秒内再次确认后只重建 checkpoint 与投影，不改写 Canonical Event。`EXPORT RUN` 将当前 Run 导出到应用数据目录的 `exports/`，自动生成不覆盖的 JSONL 文件名并在界面显示完整路径。
 
 ## 实时监测
 
@@ -570,6 +570,7 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - Homebrew Formula/Cask 生成、官方样式校验和 Tap 自动更新流程。
 - TUI、Web、Tauri 删除最后一个 Session 后的统一空态与自动恢复生命周期。
 - 桌面 Runtime Diagnostics 的只读 Storage Doctor 与数据库健康摘要。
+- 固定数据库边界、两步确认、Ingest 停止门禁的桌面 repair，以及当前 Run 安全导出。
 
 ### Beta 前待完成
 
@@ -577,7 +578,6 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - 四平台实体安装、升级、回滚和卸载测试；
 - 自动更新通道与签名密钥轮换流程；
 - 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；
-- 桌面诊断抽屉接入受控 repair/export；
 - 上游 Runtime 多版本兼容矩阵；
 - 公开发布前的名称、包名和商标检查。
 

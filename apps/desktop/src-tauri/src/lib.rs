@@ -2,6 +2,9 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use orchetrace_storage::{EventStore, StorageDiagnostics};
@@ -21,10 +24,13 @@ use runtime_observer::{ManagedRuntimeObserver, RuntimeObserverConfig, RuntimeObs
 struct DesktopState {
     data_dir: PathBuf,
     database_path: PathBuf,
+    cli_path: PathBuf,
+    export_dir: PathBuf,
     legacy_snapshot: PathBuf,
-    ingest: ManagedIngest,
+    ingest: Arc<ManagedIngest>,
     claude: ManagedClaude,
     observers: BTreeMap<&'static str, ManagedRuntimeObserver>,
+    maintenance: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +50,12 @@ struct DesktopStorageStatus {
     message: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopMaintenanceOutcome {
+    message: String,
+    output_path: Option<String>,
+}
+
 #[tauri::command]
 fn desktop_info(state: tauri::State<'_, DesktopState>) -> DesktopInfo {
     DesktopInfo {
@@ -60,9 +72,163 @@ async fn storage_diagnostics(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopStorageStatus, String> {
     let database_path = state.database_path.clone();
-    tauri::async_runtime::spawn_blocking(move || diagnose_storage(&database_path))
-        .await
-        .map_err(|error| format!("storage doctor task failed: {error}"))?
+    let maintenance = Arc::clone(&state.maintenance);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = maintenance
+            .lock()
+            .map_err(|_| "desktop maintenance lock is poisoned".to_owned())?;
+        diagnose_storage(&database_path)
+    })
+    .await
+    .map_err(|error| format!("storage doctor task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn repair_storage(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopMaintenanceOutcome, String> {
+    let maintenance = Arc::clone(&state.maintenance);
+    let ingest = Arc::clone(&state.ingest);
+    let cli_path = state.cli_path.clone();
+    let database_path = state.database_path.clone();
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = maintenance
+            .lock()
+            .map_err(|_| "desktop maintenance lock is poisoned".to_owned())?;
+        if ingest.status()?.phase == "running" {
+            return Err("stop managed ingest before repairing derived storage".to_owned());
+        }
+        run_repair(&cli_path, &database_path, &data_dir)
+    })
+    .await
+    .map_err(|error| format!("storage repair task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn export_run(
+    state: tauri::State<'_, DesktopState>,
+    run_id: String,
+) -> Result<DesktopMaintenanceOutcome, String> {
+    if run_id.is_empty() || run_id.chars().count() > 2_048 {
+        return Err("run id must contain 1 to 2048 characters".to_owned());
+    }
+    let maintenance = Arc::clone(&state.maintenance);
+    let cli_path = state.cli_path.clone();
+    let database_path = state.database_path.clone();
+    let export_dir = state.export_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = maintenance
+            .lock()
+            .map_err(|_| "desktop maintenance lock is poisoned".to_owned())?;
+        run_export(&cli_path, &database_path, &export_dir, &run_id)
+    })
+    .await
+    .map_err(|error| format!("run export task failed: {error}"))?
+}
+
+fn run_repair(
+    cli_path: &Path,
+    database_path: &Path,
+    data_dir: &Path,
+) -> Result<DesktopMaintenanceOutcome, String> {
+    ensure_cli_available(cli_path)?;
+    let output = Command::new(cli_path)
+        .arg("repair")
+        .arg("--db")
+        .arg(database_path)
+        .arg("--data-dir")
+        .arg(data_dir)
+        .output()
+        .map_err(|error| format!("failed to start {}: {error}", cli_path.display()))?;
+    Ok(DesktopMaintenanceOutcome {
+        message: successful_command_message(output)?,
+        output_path: None,
+    })
+}
+
+fn run_export(
+    cli_path: &Path,
+    database_path: &Path,
+    export_dir: &Path,
+    run_id: &str,
+) -> Result<DesktopMaintenanceOutcome, String> {
+    ensure_cli_available(cli_path)?;
+    fs::create_dir_all(export_dir).map_err(|error| format!("{}: {error}", export_dir.display()))?;
+    let output_path = next_export_path(export_dir);
+    let output = Command::new(cli_path)
+        .arg("export")
+        .arg("--db")
+        .arg(database_path)
+        .arg("--run-id")
+        .arg(run_id)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .map_err(|error| format!("failed to start {}: {error}", cli_path.display()))?;
+    let message = match successful_command_message(output) {
+        Ok(message) => message,
+        Err(error) => {
+            let _ = fs::remove_file(&output_path);
+            return Err(error);
+        }
+    };
+    if !output_path.is_file() {
+        return Err(format!(
+            "export command succeeded without creating {}",
+            output_path.display()
+        ));
+    }
+    Ok(DesktopMaintenanceOutcome {
+        message,
+        output_path: Some(output_path.display().to_string()),
+    })
+}
+
+fn ensure_cli_available(cli_path: &Path) -> Result<(), String> {
+    if cli_path.is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "otrace executable is unavailable at {}",
+            cli_path.display()
+        ))
+    }
+}
+
+fn successful_command_message(output: std::process::Output) -> Result<String, String> {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if output.status.success() {
+        Ok(if stdout.is_empty() {
+            "maintenance command completed".to_owned()
+        } else {
+            stdout
+        })
+    } else {
+        Err(if stderr.is_empty() {
+            "maintenance command failed without diagnostic output".to_owned()
+        } else {
+            stderr
+        })
+    }
+}
+
+fn next_export_path(export_dir: &Path) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    (0..1_000)
+        .map(|suffix| {
+            let suffix = if suffix == 0 {
+                String::new()
+            } else {
+                format!("-{suffix}")
+            };
+            export_dir.join(format!("orchetrace-run-{now}{suffix}.jsonl"))
+        })
+        .find(|candidate| !candidate.exists())
+        .unwrap_or_else(|| export_dir.join(format!("orchetrace-run-{now}-overflow.jsonl")))
 }
 
 fn diagnose_storage(database_path: &Path) -> Result<DesktopStorageStatus, String> {
@@ -193,6 +359,10 @@ fn managed_ingest_status(state: tauri::State<'_, DesktopState>) -> Result<Ingest
 
 #[tauri::command]
 fn start_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
+    let _guard = state
+        .maintenance
+        .lock()
+        .map_err(|_| "desktop maintenance lock is poisoned".to_owned())?;
     let status = state.ingest.start()?;
     if let Some(token) = status.connection_token.as_deref() {
         let _ = state.claude.start(token);
@@ -205,6 +375,10 @@ fn start_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestS
 
 #[tauri::command]
 fn stop_managed_ingest(state: tauri::State<'_, DesktopState>) -> Result<IngestStatus, String> {
+    let _guard = state
+        .maintenance
+        .lock()
+        .map_err(|_| "desktop maintenance lock is poisoned".to_owned())?;
     for observer in state.observers.values().rev() {
         let _ = observer.stop();
     }
@@ -543,14 +717,15 @@ pub fn run() {
                     }
                 });
             let database_path = app_data_dir.join("orchetrace.db");
-            let ingest = ManagedIngest::new(IngestConfig {
-                cli_path: resolve_cli_path(&resource_dir),
+            let cli_path = resolve_cli_path(&resource_dir);
+            let ingest = Arc::new(ManagedIngest::new(IngestConfig {
+                cli_path: cli_path.clone(),
                 data_dir: data_dir.clone(),
                 database_path: database_path.clone(),
                 ingest_endpoint: "127.0.0.1:43117".to_owned(),
                 live_endpoint: "127.0.0.1:43118".to_owned(),
                 web_origin: desktop_web_origin(),
-            });
+            }));
             let user_home = home_dir();
             let claude_runtime = orchetrace_protocol::runtime_descriptor("claude-code")
                 .ok_or("Claude runtime descriptor is unavailable")?;
@@ -603,16 +778,21 @@ pub fn run() {
             app.manage(DesktopState {
                 data_dir,
                 database_path,
+                cli_path,
+                export_dir: app_data_dir.join("exports"),
                 legacy_snapshot,
                 ingest,
                 claude,
                 observers,
+                maintenance: Arc::new(Mutex::new(())),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             desktop_info,
             storage_diagnostics,
+            repair_storage,
+            export_run,
             read_catalog,
             read_run_snapshot,
             read_run_delta,
@@ -649,7 +829,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnose_storage, packaged_executable, read_json, resolve_adapter_entry, run_file,
+        diagnose_storage, next_export_path, packaged_executable, read_json, resolve_adapter_entry,
+        run_export, run_file, run_repair,
     };
     use orchetrace_storage::EventStore;
     use serde_json::json;
@@ -721,6 +902,50 @@ mod tests {
                 .event_count,
             0
         );
+
+        fs::remove_dir_all(directory).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn managed_exports_never_overwrite_an_existing_file() {
+        let directory = temp_dir();
+        let first = next_export_path(&directory);
+        assert_eq!(first.parent(), Some(directory.as_path()));
+        fs::write(&first, b"existing export").expect("first export should be written");
+        let second = next_export_path(&directory);
+        assert_eq!(second.parent(), Some(directory.as_path()));
+        assert_ne!(second, first);
+
+        fs::remove_dir_all(directory).expect("temp directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn maintenance_helpers_keep_outputs_inside_managed_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temp_dir();
+        let cli = directory.join("otrace-test");
+        fs::write(
+            &cli,
+            b"#!/bin/sh\ncase \"$1\" in\nrepair) printf 'repaired\\n' ;;\nexport) shift; while [ \"$#\" -gt 0 ]; do if [ \"$1\" = '--output' ]; then shift; printf 'event\\n' > \"$1\"; fi; shift; done; printf 'exported\\n' ;;\n*) exit 2 ;;\nesac\n",
+        )
+        .expect("fake CLI should be written");
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700))
+            .expect("fake CLI should be executable");
+        let database = directory.join("orchetrace.db");
+        let data = directory.join("data");
+        let exports = directory.join("exports");
+        fs::write(&database, b"fixture").expect("database placeholder should be written");
+
+        let repair = run_repair(&cli, &database, &data).expect("repair should complete");
+        assert_eq!(repair.output_path, None);
+        assert_eq!(repair.message, "repaired");
+        let export =
+            run_export(&cli, &database, &exports, "opaque/run-id").expect("export should complete");
+        let output = PathBuf::from(export.output_path.expect("export path should be returned"));
+        assert_eq!(output.parent(), Some(exports.as_path()));
+        assert_eq!(fs::read_to_string(output).unwrap(), "event\n");
 
         fs::remove_dir_all(directory).expect("temp directory should be removed");
     }
