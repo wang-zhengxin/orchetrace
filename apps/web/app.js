@@ -1,4 +1,5 @@
 import { applyRunSnapshotDelta } from "./run-delta.js";
+import { emptyCatalogPresentation, preferredRunId } from "./catalog-state.js";
 import { agentEventsAtTime, snapshotAtTime, timelineBounds } from "./time-travel.js";
 import { compactTimelineMarkers, indexTimelineBySession } from "./timeline-index.js";
 import { loadTimelinePages } from "./timeline-pages.js";
@@ -104,6 +105,7 @@ const refs = Object.fromEntries(
     "graph-viewport",
     "graph-spacer",
     "graph-stage",
+    "graph-empty",
     "edge-layer",
     "node-layer",
     "zoom-out",
@@ -843,16 +845,16 @@ async function refreshCatalog(initial, deltaRunIds = null) {
       if (initial) return loadLegacySnapshot();
       throw error;
     }
-    if (!Array.isArray(catalog.runs) || catalog.runs.length === 0) {
-      throw new Error("Run catalog is empty");
-    }
+    if (!Array.isArray(catalog.runs)) throw new Error("Run catalog does not contain a runs array");
     state.catalog = catalog;
-    if (!catalog.runs.some((run) => run.run_id === state.currentRunId)) {
-      const showcase = catalog.runs
-        .filter((run) => run.source_id === "local-demo")
-        .sort((left, right) => right.agent_count - left.agent_count || right.event_count - left.event_count)[0];
-      state.currentRunId = (showcase ?? catalog.runs[0]).run_id;
+    const preferred = preferredRunId(catalog, state.currentRunId);
+    if (!preferred) {
+      applyEmptyCatalog(catalog);
+      restoreLiveHealth();
+      refs.fatalState.hidden = true;
+      return;
     }
+    state.currentRunId = preferred;
     const summary = currentRunSummary();
     const changed =
       state.loadedRunId !== state.currentRunId ||
@@ -874,6 +876,51 @@ async function refreshCatalog(initial, deltaRunIds = null) {
     if (state.mode === "live") setHealth("degraded", "STALE");
     if (initial) throw error;
   }
+}
+
+function applyEmptyCatalog(catalog) {
+  stopPlayback();
+  state.catalog = catalog;
+  state.currentRunId = null;
+  state.loadedRunId = null;
+  state.snapshot = null;
+  state.selectedId = null;
+  state.positions = new Map();
+  state.timeCursorMs = null;
+  state.cursorPinned = false;
+  state.detailOpen = false;
+  state.timelinePromise = null;
+  refs.app.classList.remove("dense-topology", "inspector-visible");
+  refs.app.dataset.delivery = "waiting";
+  refs.nodeLayer.replaceChildren();
+  refs.edgeLayer.replaceChildren();
+  refs.timelineLanes.replaceChildren();
+  refs.timelineRuler.replaceChildren();
+  refs.graphMinimap.replaceChildren();
+  refs.graphEmpty.hidden = false;
+  refs.graphStage.style.width = "100%";
+  refs.graphStage.style.height = "100%";
+  refs.graphSpacer.style.width = "100%";
+  refs.graphSpacer.style.height = "100%";
+  refs.graphViewport.scrollTo({ left: 0, top: 0 });
+  refs.inspectorContent.closest(".inspector")?.setAttribute("aria-hidden", "true");
+  refs.inspectorContent.hidden = true;
+  refs.timelinePlay.disabled = true;
+  refs.timelineScrubber.disabled = true;
+  refs.playbackSpeed.disabled = true;
+  refs.timelineScrubber.value = "0";
+  refs.timelineScroll.style.setProperty("--cursor-position", "0%");
+  const copy = emptyCatalogPresentation(state.playbackRate);
+  refs.activeRunName.textContent = copy.activeRunName;
+  refs.graphSummary.textContent = copy.graphSummary;
+  refs.cursorState.textContent = copy.cursorState;
+  refs.timelineRange.textContent = copy.timelineRange;
+  refs.timelineCursor.textContent = copy.timelineCursor;
+  refs.timelineEventTitle.textContent = copy.timelineEventTitle;
+  refs.timelineDate.textContent = copy.timelineDate;
+  refs.timelinePlay.textContent = copy.timelinePlay;
+  refs.footerStats.textContent = copy.footerStats;
+  renderRunRail();
 }
 
 async function loadLegacySnapshot() {
@@ -921,11 +968,15 @@ async function loadRunDelta(runId, targetEventCount) {
 }
 
 function applySnapshot(snapshot, runId, highlight, delivery = "snapshot") {
-    const hadSnapshot = Boolean(state.snapshot);
-    state.snapshot = snapshot;
-    state.loadedRunId = runId;
-    state.timelinePromise = null;
-    refs.app.dataset.delivery = delivery;
+  const hadSnapshot = Boolean(state.snapshot);
+  state.snapshot = snapshot;
+  state.loadedRunId = runId;
+  state.timelinePromise = null;
+  refs.app.dataset.delivery = delivery;
+  refs.timelinePlay.disabled = false;
+  refs.timelineScrubber.disabled = false;
+  refs.playbackSpeed.disabled = false;
+  refs.graphEmpty.hidden = true;
   const bounds = timelineBounds(snapshot);
   if (!state.cursorPinned || !Number.isFinite(state.timeCursorMs)) state.timeCursorMs = bounds.end;
   else state.timeCursorMs = clamp(state.timeCursorMs, bounds.start, bounds.end);
@@ -980,6 +1031,15 @@ function renderRunRail() {
   if (!state.catalog) return;
   refs.runList.replaceChildren();
   const current = currentRunSummary();
+  if (!current) {
+    refs.activeRunName.textContent = "Waiting for Agent activity";
+    const empty = document.createElement("p");
+    empty.className = "run-list-empty";
+    empty.textContent = "No observed Sessions. New Agent activity will appear automatically.";
+    refs.runList.append(empty);
+    renderSources();
+    return;
+  }
   refs.activeRunName.textContent = `${runtimeLabel(current.runtime)} / ${current.label}`;
   const actions = document.createElement("div");
   actions.className = "session-actions";
@@ -1102,7 +1162,7 @@ function renderSources() {
 }
 
 function currentRunSummary() {
-  return state.catalog.runs.find((run) => run.run_id === state.currentRunId) ?? state.catalog.runs[0];
+  return state.catalog?.runs.find((run) => run.run_id === state.currentRunId) ?? state.catalog?.runs[0] ?? null;
 }
 
 function layoutGraph() {

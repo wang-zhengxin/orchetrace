@@ -162,6 +162,7 @@ orche
 
 Session 重命名只新增一条本地 metadata 事件，不修改 Runtime 的原始 Session ID；删除通过受 token 认证的本机 Ingest 原子执行，并同步更新 SQLite、Catalog、Snapshot 与时间轴。正在持续写入的 Runtime 可能在删除后重新发现同一 Session；如需永久清理活动会话，应先结束对应 Agent。
 在 Tauri 桌面端的 Session 选择器顶部也可直接重命名或删除；操作只在受管 Ingest 运行时启用，认证 token 不会暴露给普通浏览器页面。
+删除最后一个 Session 后，TUI、Web 和 Tauri 会进入 `WAITING FOR SESSION` 空态并继续监听；后续发现新的 Agent 活动时会自动恢复拓扑与时间轴，无需重启 `orche`。
 Web/Tauri 时间轴底部提供同样的倍率选择器，播放中也能即时切换，不会改变已选的历史游标。
 
 ## 启动本地 Live 服务

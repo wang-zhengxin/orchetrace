@@ -171,6 +171,7 @@ orche --data-dir /path/to/orchetrace/data
 
 重命名会保留 Runtime、source 和原始 Session ID，仅记录一条本地 `session.metadata_changed`。删除由受 token 认证的本机 Ingest 执行，会级联删除后代 Agent 并同步重建 Catalog、Snapshot 和时间轴。活动 Runtime 如果继续写入，watcher 可能再次发现已删除的 Session；永久清理前应先结束对应 Agent。
 桌面端还会在 Session 选择器内提供 `RENAME` / `DELETE`；两个操作都经过 Tauri 命令转发到受认证的本机 Ingest，普通 Web 模式不获取控制 token，也不启用破坏性按钮。
+删除最后一个 Session 后，TUI、Web 与 Tauri 会显示 `WAITING FOR SESSION`，但不会退出 Live 监听；新的 Agent 会话被 watcher 发现后，Catalog、拓扑和时间轴会自动恢复。
 Web/Tauri 底部时间轴提供 `0.25×` / `0.5×` / `1×` / `2×` / `4×` / `8×` 倍率选择，也可使用 `,` / `.` 切换；播放过程中改速会从当前游标继续。
 
 ## Web 与桌面端
@@ -565,6 +566,7 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - macOS ARM/Intel、Linux x64、Windows x64 可搬迁 CLI archive 与 SHA-256；
 - npm 主包、平台原生包、离线安装烟测和 provenance 发布流程；
 - Homebrew Formula/Cask 生成、官方样式校验和 Tap 自动更新流程。
+- TUI、Web、Tauri 删除最后一个 Session 后的统一空态与自动恢复生命周期。
 
 ### Beta 前待完成
 

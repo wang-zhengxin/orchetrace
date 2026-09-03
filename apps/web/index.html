@@ -48,6 +48,7 @@
         <div class="graph-hud"><span id="graph-summary">Loading run snapshot…</span><span id="cursor-state">LATEST STATE</span></div>
         <div class="graph-viewport" id="graph-viewport" tabindex="0" aria-label="Agent topology graph">
           <div class="graph-spacer" id="graph-spacer"><div class="graph-stage" id="graph-stage"><svg class="edge-layer" id="edge-layer" aria-hidden="true"></svg><div class="node-layer" id="node-layer"></div></div></div>
+          <div class="graph-empty" id="graph-empty" role="status" hidden><span class="empty-reticle" aria-hidden="true"></span><strong>WAITING FOR SESSION</strong><p>Start Claude Code, Codex, Pi, DeepSeek Harness, or Antigravity. New Agent activity appears automatically.</p></div>
           <div class="graph-minimap" id="graph-minimap" aria-hidden="true"></div>
           <div class="graph-legend" aria-label="Status legend"><span><i class="status-symbol running">●</i> running</span><span><i class="status-symbol ready">◆</i> ready</span><span><i class="status-symbol succeeded">✓</i> done</span><span><i class="status-symbol failed">✕</i> failed</span></div>
         </div>
