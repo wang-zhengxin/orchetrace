@@ -75,6 +75,7 @@ test("Homebrew definitions pin immutable release assets and runtime paths", () =
   const formula = renderHomebrewFormula(common);
   assert.match(formula, /depends_on "node@22"/);
   assert.match(formula, /ORCHETRACE_PROJECT_ROOT/);
+  assert.match(formula, /formula_opt_bin\("node@22"\)/);
   assert.match(formula, /v0\.1\.0-beta\.4\/orchetrace-cli/);
 
   const cask = renderHomebrewCask({
@@ -83,6 +84,7 @@ test("Homebrew definitions pin immutable release assets and runtime paths", () =
     intel: { name: "Orchetrace_0.1.0_x64.dmg", sha256: "d".repeat(64) },
   });
   assert.match(cask, /arch arm: "aarch64", intel: "x64"/);
+  assert.match(cask, /depends_on :macos/);
   assert.match(cask, /Orchetrace_0\.1\.0_#\{arch\}\.dmg/);
 
   const localFormula = renderHomebrewFormula({
@@ -137,6 +139,8 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   assert.doesNotMatch(release, /gh release download/u);
   assert.match(release, /desktop-version-lifecycle:/u);
   assert.match(release, /download-desktop-baseline\.mjs/u);
+  assert.match(release, /--minimum-tag v0\.1\.0-beta\.4/u);
+  assert.doesNotMatch(release, /--current-tag "\$ORCHETRACE_CURRENT_TAG"/u);
   assert.match(release, /smoke-desktop-version-lifecycle\.mjs/u);
   assert.match(release, /needs: \[release-policy, desktop, homebrew, desktop-version-lifecycle\]/u);
   assert.match(release, /Build preview installers without creating a release/u);

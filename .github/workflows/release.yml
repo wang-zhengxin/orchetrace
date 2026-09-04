@@ -277,7 +277,7 @@ jobs:
       - name: Download previous Cask baseline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "$ORCHETRACE_CURRENT_TAG" --target aarch64-apple-darwin --output dist/homebrew-baseline
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --minimum-tag v0.1.0-beta.4 --target aarch64-apple-darwin --output dist/homebrew-baseline
 
       - name: Verify Homebrew Formula and Cask installation
         run: node scripts/smoke-homebrew-lifecycle.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew --baseline-root dist/homebrew-baseline
@@ -338,7 +338,7 @@ jobs:
       - name: Download latest compatible release baseline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "$ORCHETRACE_CURRENT_TAG" --target "${{ matrix.target }}" --output dist/desktop-baseline
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --minimum-tag v0.1.0-beta.4 --target "${{ matrix.target }}" --output dist/desktop-baseline
 
       - name: Verify baseline, candidate, rollback, and shared data
         run: node scripts/smoke-desktop-version-lifecycle.mjs --target "${{ matrix.target }}" --baseline-root dist/desktop-baseline --candidate-root dist/desktop-candidate

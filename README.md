@@ -413,9 +413,9 @@ gh workflow run release.yml -f version=0.1.0-beta.4
 
 签名发布时，macOS 凭据只注入 Tauri 构建步骤，并在打包后验证 Developer ID Authority、公证票据 stapling 与 Gatekeeper；Windows PFX 只写入 runner 临时目录，导入当前用户证书库后立即删除文件，并将实际 thumbprint 写入 runner 的临时发布配置，打包后再验证 MSI 和主程序的 Authenticode。候选摘要会记录 `signed`、`unsigned-allowed` 或 `blocked`，但不会持久化任何凭据值。
 
-标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask。Formula 使用同一候选 CLI 归档的基线版本定义验证安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 使用最近公开 Release 的真实 DMG 完成上一版安装、候选升级、上一版回滚、隔离桌面启动与共享数据保留。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
+标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask。Formula 使用同一候选 CLI 归档的基线版本定义验证安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 使用最近兼容 Release 的真实 DMG 完成上一版安装、候选升级、上一版回滚、隔离桌面启动与共享数据保留。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
 
-当仓库已经存在上一版非草稿 Release 时，四个平台还会自动下载包含对应架构安装器的最近版本，在同一隔离 HOME/App Data 上依次启动“上一版 → 当前候选版 → 上一版”，验证升级和回滚后数据仍被保留。首个 Release 没有可用基线时会写入明确的 first-release 结果，而不会伪造历史版本。
+桌面安装器兼容基线从 `v0.1.0-beta.4` 开始；更早的实验包不具备当前隔离启动与资源目录契约，不作为可回滚基线。当仓库存在不低于该兼容下限的上一版非草稿 Release 时，四个平台会自动下载对应架构安装器，在同一隔离 HOME/App Data 上依次启动“上一版 → 当前候选版 → 上一版”，验证升级和回滚后数据仍被保留。首个兼容 Release 会写入明确的 first-compatible-release 结果，而不会伪造历史版本。
 
 设置仓库变量 `NPM_PUBLISH=true` 后，流水线会按“平台包优先、主包最后”的顺序发布 `@orchetrace/cli@beta`，并启用 npm provenance。设置 `HOMEBREW_PUBLISH=true` 和具备 `wang-zhengxin/homebrew-tap` 写权限的 `HOMEBREW_TAP_TOKEN` 后，会依据 Release 中不可变资产的 SHA-256 自动更新 Formula 与 Cask。未设置这些开关时仍会构建、打包和验证，避免误发布。
 

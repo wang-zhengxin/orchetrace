@@ -130,11 +130,11 @@ node scripts/smoke-install-lifecycle.mjs \
 
 Tauri 构建之后，Release job 还会在对应操作系统原生解包 DMG、DEB 或 MSI，检查桌面主程序、Node.js 22、`otrace`、五套 Adapter 和 macOS 代码签名，并输出安装器 SHA-256。随后从最终安装器启动桌面主程序，使用 `ORCHETRACE_APP_DATA_DIR`、`ORCHETRACE_DATA_DIR`、XDG 与 WebView2 临时目录隔离测试数据，设置 `ORCHETRACE_AUTOSTART=0`；Linux 通过临时 Xvfb 显示环境运行。确认桌面事件循环稳定后会回收整个进程组并删除临时安装。已验证的安装器通过 Actions artifact 传给后续任务，不依赖草稿 Release 的下载权限。
 
-标签发布还会在全新 macOS runner 上对生成的 Formula 和 Cask 执行 `brew style` 与实体生命周期。Formula 使用同一候选 CLI 归档生成基线/候选版本定义，真实执行安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 自动下载最近公开 Release 的真实 DMG，在临时 Applications 和共享隔离数据目录中执行上一版安装、候选升级、上一版回滚与桌面启动。通过该门禁后才允许更新项目 Tap。
+标签发布还会在全新 macOS runner 上对生成的 Formula 和 Cask 执行 `brew style` 与实体生命周期。Formula 使用同一候选 CLI 归档生成基线/候选版本定义，真实执行安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 自动下载最近兼容 Release 的真实 DMG，在临时 Applications 和共享隔离数据目录中执行上一版安装、候选升级、上一版回滚与桌面启动。通过该门禁后才允许更新项目 Tap。
 
 `v0.1.0-beta.3` 尚未发布 CLI 归档，因此 Formula 当前验证的是 Homebrew 版本事务而非两个历史二进制。等首个包含 CLI 归档的 Release 发布后，可把 Formula 基线自动切换为真实历史资产；Cask 从当前阶段起已经使用真实历史 DMG。
 
-桌面跨版本任务会从 GitHub Releases 自动选择当前标签之前、含目标架构安装器的最新非草稿版本。四个平台分别在同一隔离 HOME/App Data 中执行“上一版 → 当前候选版 → 上一版”启动序列，并校验升级、回滚过程没有删除共享数据。首发没有历史安装器时会生成明确的跳过标记；从第二个兼容 Release 开始，该门禁是强制的。
+桌面跨版本任务以 `v0.1.0-beta.4` 为兼容基线起点，从 GitHub Releases 自动选择当前标签之前、不低于该下限且含目标架构安装器的最新非草稿版本。四个平台分别在同一隔离 HOME/App Data 中执行“上一版 → 当前候选版 → 上一版”启动序列，并校验升级、回滚过程没有删除共享数据。首个兼容版本会生成明确的跳过标记；从第二个兼容 Release 开始，该门禁是强制的。
 
 ## 快速开始
 

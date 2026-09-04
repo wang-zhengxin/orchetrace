@@ -22,11 +22,12 @@ export function releaseAssetMatchesTarget(name, target) {
   return normalized.includes("x64") || normalized.includes("x86_64");
 }
 
-export function selectDesktopBaseline(releases, currentTag, target) {
+export function selectDesktopBaseline(releases, currentTag, target, minimumTag) {
   for (const release of releases) {
     if (release.draft) continue;
     try {
       if (compareReleaseVersions(release.tag_name, currentTag) >= 0) continue;
+      if (minimumTag && compareReleaseVersions(release.tag_name, minimumTag) < 0) continue;
     } catch {
       continue;
     }
@@ -73,7 +74,7 @@ function parseReleaseVersion(tag) {
   };
 }
 
-export async function downloadDesktopBaseline({ repository, currentTag, target, output }) {
+export async function downloadDesktopBaseline({ repository, currentTag, minimumTag, target, output }) {
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   const headers = {
     Accept: "application/vnd.github+json",
@@ -84,7 +85,7 @@ export async function downloadDesktopBaseline({ repository, currentTag, target, 
     headers,
   });
   if (!response.ok) throw new Error(`GitHub releases request failed: HTTP ${response.status}`);
-  const selected = selectDesktopBaseline(await response.json(), currentTag, target);
+  const selected = selectDesktopBaseline(await response.json(), currentTag, target, minimumTag);
   const outputRoot = path.resolve(output);
   await mkdir(outputRoot, { recursive: true });
   if (!selected) {
@@ -118,9 +119,18 @@ export async function downloadDesktopBaseline({ repository, currentTag, target, 
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = parseArguments(process.argv.slice(2));
+  const currentTag = args.get("--current-tag") ?? process.env.ORCHETRACE_CURRENT_TAG;
+  if (typeof currentTag !== "string" || currentTag.length === 0) {
+    throw new Error("--current-tag or ORCHETRACE_CURRENT_TAG is required");
+  }
+  const minimumTag = args.get("--minimum-tag");
+  if (minimumTag !== undefined && typeof minimumTag !== "string") {
+    throw new Error("--minimum-tag requires a value");
+  }
   const result = await downloadDesktopBaseline({
     repository: requiredArgument(args, "--repository"),
-    currentTag: requiredArgument(args, "--current-tag"),
+    currentTag,
+    minimumTag,
     target: requiredArgument(args, "--target"),
     output: requiredArgument(args, "--output"),
   });

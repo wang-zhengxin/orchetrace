@@ -25,6 +25,22 @@ test("desktop baseline skips drafts and the current tag", () => {
   assert.equal(selected?.tag, "v0.1.0-beta.3");
 });
 
+test("desktop baseline honors the compatibility floor", () => {
+  const asset = { name: "Orchetrace_0.1.0_aarch64.dmg", url: "asset-api" };
+  const releases = [
+    { tag_name: "v0.1.0-beta.4", draft: false, assets: [asset] },
+    { tag_name: "v0.1.0-beta.3", draft: false, assets: [asset] },
+  ];
+  assert.equal(
+    selectDesktopBaseline(releases, "v0.1.0-beta.5", "aarch64-apple-darwin", "v0.1.0-beta.4")?.tag,
+    "v0.1.0-beta.4",
+  );
+  assert.equal(
+    selectDesktopBaseline(releases, "v0.1.0-beta.4", "aarch64-apple-darwin", "v0.1.0-beta.4"),
+    undefined,
+  );
+});
+
 test("desktop baseline orders stable and prerelease semantic versions", () => {
   assert.ok(compareReleaseVersions("v0.1.0-beta.3", "v0.1.0-beta.4") < 0);
   assert.ok(compareReleaseVersions("v0.1.0-beta.10", "v0.1.0-beta.4") > 0);

@@ -157,7 +157,7 @@ export function renderHomebrewFormula({ version, repository, arm, intel }) {
     libexec.install Dir["*"]
     runtime_env = {
       "ORCHETRACE_PROJECT_ROOT" => libexec,
-      "ORCHETRACE_NODE_PATH"    => Formula["node@22"].opt_bin/"node",
+      "ORCHETRACE_NODE_PATH"    => formula_opt_bin("node@22")/"node",
       "ORCHETRACE_CLI_PATH"     => libexec/"bin/otrace",
       "ORCHETRACE_ZSTD_PATH"    => libexec/"bin/otrace",
     }
@@ -188,6 +188,8 @@ export function renderHomebrewCask({ version, repository, arm, intel, url }) {
   name "Orchetrace"
   desc "Local-first multi-Agent observability desktop application"
   homepage "https://github.com/${repository}"
+
+  depends_on :macos
 
   app "Orchetrace.app"
 
