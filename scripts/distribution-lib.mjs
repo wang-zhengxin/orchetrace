@@ -94,7 +94,11 @@ export function executableInvocation(command, commandArgs, {
   // with a quoted path. Prefixing the batch launcher with `call` keeps paths
   // containing spaces intact and also propagates the launcher's exit code.
   const commandLine = ["call", quoteCmdArgument(command), ...commandArgs.map(quoteCmdArgument)].join(" ");
-  return { command: comSpec, args: ["/d", "/s", "/c", commandLine] };
+  return {
+    command: comSpec,
+    args: ["/d", "/s", "/c", commandLine],
+    options: { windowsVerbatimArguments: true },
+  };
 }
 
 function quoteCmdArgument(value) {

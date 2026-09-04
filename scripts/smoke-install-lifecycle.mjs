@@ -200,6 +200,7 @@ function executeShim(prefix, name, commandArgs, environment) {
   return execute(invocation.command, invocation.args, {
     cwd: temporaryRoot,
     env: environment,
+    ...invocation.options,
   });
 }
 

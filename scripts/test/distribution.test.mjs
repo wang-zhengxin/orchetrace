@@ -57,6 +57,7 @@ test("Windows npm command shims retain quoted paths", () => {
       "/c",
       'call "C:\\Users\\Runner Admin\\prefix\\orche.cmd" "--help"',
     ],
+    options: { windowsVerbatimArguments: true },
   });
   assert.deepEqual(executableInvocation("/tmp/orche", ["--help"], { platform: "linux" }), {
     command: "/tmp/orche",
