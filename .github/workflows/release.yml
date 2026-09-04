@@ -121,6 +121,9 @@ jobs:
           prerelease: true
           args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
 
+      - name: Verify final desktop installer contents
+        run: node scripts/verify-desktop-artifact.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
+
   distribution:
     name: Publish CLI, npm, and Homebrew metadata
     if: github.ref_type == 'tag'
