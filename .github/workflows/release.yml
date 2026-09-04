@@ -49,6 +49,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
+            xauth \
+            xvfb \
             xdg-utils
 
       - name: Set up official Node.js runtime
@@ -124,8 +126,7 @@ jobs:
       - name: Verify final desktop installer contents
         run: node scripts/verify-desktop-artifact.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
 
-      - name: Verify isolated macOS desktop launch
-        if: startsWith(matrix.platform, 'macos-')
+      - name: Verify isolated desktop launch
         run: node scripts/smoke-desktop-launch.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
 
   distribution:

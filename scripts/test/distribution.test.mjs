@@ -68,4 +68,10 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
     release,
     /smoke-desktop-launch\.mjs --target \$\{\{ matrix\.target \}\}/u,
   );
+  assert.doesNotMatch(
+    release,
+    /Verify isolated macOS desktop launch/u,
+  );
+  assert.match(release, /xauth/u);
+  assert.match(release, /xvfb/u);
 });

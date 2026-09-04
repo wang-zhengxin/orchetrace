@@ -3,17 +3,15 @@ import { access, mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { distributionTarget, parseArguments, requiredArgument } from "./distribution-lib.mjs";
+import { installerExtension, locateExtractedRuntime } from "./verify-desktop-artifact.mjs";
 
 const execute = promisify(execFile);
 
 export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 }) {
   const metadata = distributionTarget(target);
-  if (metadata.os !== "darwin") {
-    throw new Error("isolated desktop launch smoke currently supports macOS DMG artifacts only");
-  }
   if (process.platform !== metadata.os || process.arch !== metadata.cpu) {
     throw new Error(
       `desktop launch smoke must run on ${metadata.os}-${metadata.cpu}; ` +
@@ -21,35 +19,28 @@ export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 
     );
   }
 
+  const extension = installerExtension(target);
   const installers = (await walkFiles(path.resolve(bundleRoot)))
-    .filter((file) => file.toLowerCase().endsWith(".dmg"))
+    .filter((file) => file.toLowerCase().endsWith(extension))
     .sort();
-  if (installers.length === 0) throw new Error("desktop launch smoke could not find a DMG");
+  if (installers.length === 0) {
+    throw new Error(`desktop launch smoke could not find a ${extension} installer`);
+  }
 
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), "orchetrace-desktop-launch-"));
-  const mountPoint = path.join(temporaryRoot, "mount");
-  const installedApp = path.join(temporaryRoot, "Applications", "Orchetrace.app");
+  const extractedRoot = path.join(temporaryRoot, "extracted");
   let mounted = false;
   try {
-    await mkdir(mountPoint, { recursive: true });
-    await execute("hdiutil", [
-      "attach",
-      installers[0],
-      "-readonly",
-      "-nobrowse",
-      "-mountpoint",
-      mountPoint,
-    ]);
-    mounted = true;
-    const sourceApp = path.join(mountPoint, "Orchetrace.app");
-    await access(path.join(sourceApp, "Contents", "Info.plist"));
-    await mkdir(path.dirname(installedApp), { recursive: true });
-    await execute("ditto", [sourceApp, installedApp]);
-    await execute("hdiutil", ["detach", mountPoint, "-force"]);
-    mounted = false;
-
-    await execute("codesign", ["--verify", "--deep", "--strict", installedApp]);
-    const executable = path.join(installedApp, "Contents", "MacOS", "orchetrace-desktop");
+    await mkdir(extractedRoot, { recursive: true });
+    const installation = await extractDesktopApplication({
+      installer: installers[0],
+      metadata,
+      target,
+      temporaryRoot,
+      extractedRoot,
+      onMounted: () => { mounted = true; },
+      onDetached: () => { mounted = false; },
+    });
     const isolatedHome = path.join(temporaryRoot, "home");
     await mkdir(isolatedHome, { recursive: true });
     const environment = {
@@ -59,22 +50,103 @@ export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 
       ORCHETRACE_APP_DATA_DIR: path.join(temporaryRoot, "app-data"),
       ORCHETRACE_DATA_DIR: path.join(temporaryRoot, "data"),
       ORCHETRACE_AUTOSTART: "0",
+      WEBVIEW2_USER_DATA_FOLDER: path.join(temporaryRoot, "webview2"),
+      ...(metadata.os === "linux" ? {
+        NO_AT_BRIDGE: "1",
+        WEBKIT_DISABLE_COMPOSITING_MODE: "1",
+        XDG_CACHE_HOME: path.join(temporaryRoot, "xdg", "cache"),
+        XDG_CONFIG_HOME: path.join(temporaryRoot, "xdg", "config"),
+        XDG_DATA_HOME: path.join(temporaryRoot, "xdg", "data"),
+      } : {}),
     };
-    const launch = await launchUntilSettled(executable, environment, settleMs);
+    const command = desktopLaunchCommand(metadata, installation.executable);
+    const launch = await launchUntilSettled(
+      command.executable,
+      environment,
+      settleMs,
+      command.args,
+      path.dirname(installation.executable),
+    );
     return {
       installer: installers[0],
       settleMs,
       stderr: launch.stderr,
     };
   } finally {
-    if (mounted) await execute("hdiutil", ["detach", mountPoint, "-force"]);
+    if (mounted) await execute("hdiutil", ["detach", extractedRoot, "-force"]);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 }
 
-export function launchUntilSettled(executable, environment, settleMs, executableArgs = []) {
+async function extractDesktopApplication({
+  installer,
+  metadata,
+  target,
+  temporaryRoot,
+  extractedRoot,
+  onMounted,
+  onDetached,
+}) {
+  if (metadata.os === "darwin") {
+    await execute("hdiutil", [
+      "attach",
+      installer,
+      "-readonly",
+      "-nobrowse",
+      "-mountpoint",
+      extractedRoot,
+    ]);
+    onMounted();
+    const sourceApp = path.join(extractedRoot, "Orchetrace.app");
+    const installedApp = path.join(temporaryRoot, "Applications", "Orchetrace.app");
+    await access(path.join(sourceApp, "Contents", "Info.plist"));
+    await mkdir(path.dirname(installedApp), { recursive: true });
+    await execute("ditto", [sourceApp, installedApp]);
+    await execute("hdiutil", ["detach", extractedRoot, "-force"]);
+    onDetached();
+    await execute("codesign", ["--verify", "--deep", "--strict", installedApp]);
+    return {
+      executable: path.join(installedApp, "Contents", "MacOS", "orchetrace-desktop"),
+    };
+  }
+
+  if (metadata.os === "linux") {
+    await execute("dpkg-deb", ["--extract", installer, extractedRoot]);
+  } else {
+    const msiexec = process.env.SystemRoot
+      ? path.join(process.env.SystemRoot, "System32", "msiexec.exe")
+      : "msiexec.exe";
+    await execute(msiexec, ["/a", installer, "/qn", `TARGETDIR=${extractedRoot}`]);
+  }
+  const runtime = locateExtractedRuntime(await walkFiles(extractedRoot), target);
+  return { executable: runtime.desktop };
+}
+
+export function desktopLaunchCommand(metadata, executable) {
+  if (metadata.os === "linux") {
+    return {
+      executable: "xvfb-run",
+      args: [
+        "--auto-servernum",
+        "--server-args=-screen 0 1280x720x24",
+        executable,
+      ],
+    };
+  }
+  return { executable, args: [] };
+}
+
+export function launchUntilSettled(
+  executable,
+  environment,
+  settleMs,
+  executableArgs = [],
+  cwd = process.cwd(),
+) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(executable, executableArgs, {
+      cwd,
+      detached: process.platform !== "win32",
       env: environment,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -84,10 +156,21 @@ export function launchUntilSettled(executable, environment, settleMs, executable
     });
     let settled = false;
     let forceTimer;
+    const terminate = (signal) => {
+      if (process.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The process group may already be gone; fall back to the child handle.
+        }
+      }
+      child.kill(signal);
+    };
     const timer = setTimeout(() => {
       settled = true;
-      child.kill("SIGTERM");
-      forceTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      terminate("SIGTERM");
+      forceTimer = setTimeout(() => terminate("SIGKILL"), 2_000);
     }, settleMs);
     child.once("error", (error) => {
       clearTimeout(timer);
