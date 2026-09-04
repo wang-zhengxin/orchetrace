@@ -26,7 +26,7 @@ export function homebrewTargetForHost(platform, arch) {
   throw new Error(`Homebrew lifecycle smoke does not support ${platform}-${arch}`);
 }
 
-export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDir }) {
+export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDir, baselineRoot }) {
   const releaseVersion = normalizeVersion(version);
   const target = homebrewTargetForHost(process.platform, process.arch);
   const files = await walkFiles(path.resolve(assetsDir));
@@ -35,6 +35,7 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
   const architectureLabel = process.arch === "arm64" ? "aarch64" : "x64";
   const dmg = uniqueFile(files, (file) =>
     file.toLowerCase().endsWith(".dmg") && path.basename(file).includes(architectureLabel), "DMG");
+  const caskBaseline = baselineRoot ? await loadCaskBaseline(baselineRoot) : undefined;
   await Promise.all([
     access(path.resolve(definitionsDir, "Formula", "orchetrace.rb")),
     access(path.resolve(definitionsDir, "Casks", "orchetrace.rb")),
@@ -42,8 +43,10 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
 
   const [archiveSha, dmgSha] = await Promise.all([sha256(archive), sha256(dmg)]);
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), "orchetrace-homebrew-lifecycle-"));
-  const localFormula = path.join(temporaryRoot, "Formula", "orchetrace.rb");
-  const localCask = path.join(temporaryRoot, "Casks", "orchetrace.rb");
+  const baselineFormula = path.join(temporaryRoot, "Formula", "baseline", "orchetrace.rb");
+  const candidateFormula = path.join(temporaryRoot, "Formula", "candidate", "orchetrace.rb");
+  const baselineCask = path.join(temporaryRoot, "Casks", "baseline", "orchetrace.rb");
+  const candidateCask = path.join(temporaryRoot, "Casks", "candidate", "orchetrace.rb");
   const appDir = path.join(temporaryRoot, "Applications");
   const brewEnvironment = {
     ...process.env,
@@ -59,33 +62,49 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
         await brewInstalled("--cask", brewEnvironment)) {
       throw new Error("refusing to replace an existing Homebrew orchetrace installation");
     }
-    await mkdir(path.dirname(localFormula), { recursive: true });
-    await mkdir(path.dirname(localCask), { recursive: true });
+    await mkdir(path.dirname(baselineFormula), { recursive: true });
+    await mkdir(path.dirname(candidateFormula), { recursive: true });
+    await mkdir(path.dirname(baselineCask), { recursive: true });
+    await mkdir(path.dirname(candidateCask), { recursive: true });
     await mkdir(appDir, { recursive: true });
     const localArchive = {
       name: path.basename(archive),
       sha256: archiveSha,
       url: pathToFileURL(archive).href,
     };
-    await writeFile(localFormula, renderHomebrewFormula({
-      version: releaseVersion,
+    const formulaDefinition = (formulaVersion) => renderHomebrewFormula({
+      version: formulaVersion,
       repository: "wang-zhengxin/orchetrace",
       arm: localArchive,
       intel: localArchive,
-    }));
-    await writeFile(localCask, renderHomebrewCask({
+    });
+    await writeFile(baselineFormula, formulaDefinition("0.0.0-lifecycle.0"));
+    await writeFile(candidateFormula, formulaDefinition(releaseVersion));
+    await writeFile(candidateCask, renderHomebrewCask({
       version: releaseVersion,
       repository: "wang-zhengxin/orchetrace",
       arm: { name: path.basename(dmg), sha256: dmgSha },
       intel: { name: path.basename(dmg), sha256: dmgSha },
       url: pathToFileURL(dmg).href,
     }));
+    if (caskBaseline) {
+      const baselineSha = await sha256(caskBaseline.dmg);
+      await writeFile(baselineCask, renderHomebrewCask({
+        version: caskBaseline.version,
+        repository: "wang-zhengxin/orchetrace",
+        arm: { name: path.basename(caskBaseline.dmg), sha256: baselineSha },
+        intel: { name: path.basename(caskBaseline.dmg), sha256: baselineSha },
+        url: pathToFileURL(caskBaseline.dmg).href,
+      }));
+    }
 
     formulaAttempted = true;
-    await brew(["install", "--formula", "--build-from-source", localFormula], brewEnvironment);
-    const { stdout: formulaPrefixOutput } = await brew(["--prefix", "orchetrace"], brewEnvironment);
-    const formulaPrefix = formulaPrefixOutput.trim();
-    await verifyCli(path.join(formulaPrefix, "bin"), temporaryRoot);
+    await brew(["install", "--formula", "--build-from-source", baselineFormula], brewEnvironment);
+    await verifyFormula("0.0.0-lifecycle.0", temporaryRoot, brewEnvironment);
+    await brew(["upgrade", "--formula", "--build-from-source", candidateFormula], brewEnvironment);
+    await verifyFormula(releaseVersion, temporaryRoot, brewEnvironment);
+    await brew(["reinstall", "--formula", "--build-from-source", baselineFormula], brewEnvironment);
+    await verifyFormula("0.0.0-lifecycle.0", temporaryRoot, brewEnvironment);
     await brew(["uninstall", "--formula", "--force", "orchetrace"], brewEnvironment);
     formulaAttempted = false;
     if (await brewInstalled("--formula", brewEnvironment)) {
@@ -93,30 +112,31 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
     }
 
     caskAttempted = true;
-    await brew([
-      "install",
-      "--cask",
-      "--no-quarantine",
-      `--appdir=${appDir}`,
-      localCask,
-    ], brewEnvironment);
-    const app = path.join(appDir, "Orchetrace.app");
-    const executable = path.join(app, "Contents", "MacOS", "orchetrace-desktop");
-    await access(executable);
-    await launchUntilSettled(executable, {
-      ...process.env,
-      HOME: path.join(temporaryRoot, "home"),
-      ORCHETRACE_APP_DATA_DIR: path.join(temporaryRoot, "app-data"),
-      ORCHETRACE_DATA_DIR: path.join(temporaryRoot, "data"),
-      ORCHETRACE_AUTOSTART: "0",
-    }, 3_000, [], path.dirname(executable));
+    if (caskBaseline) {
+      await installCask("install", baselineCask, appDir, brewEnvironment);
+      await verifyCaskVersion(caskBaseline.version, brewEnvironment);
+      await launchCask(appDir, temporaryRoot);
+      await mkdir(path.join(temporaryRoot, "app-data"), { recursive: true });
+      await writeFile(path.join(temporaryRoot, "app-data", "homebrew-sentinel.txt"), "preserve\n");
+      await installCask("upgrade", candidateCask, appDir, brewEnvironment);
+      await verifyCaskVersion(releaseVersion, brewEnvironment);
+      await launchCask(appDir, temporaryRoot);
+      await verifySentinel(temporaryRoot, "Cask upgrade");
+      await installCask("reinstall", baselineCask, appDir, brewEnvironment);
+      await verifyCaskVersion(caskBaseline.version, brewEnvironment);
+      await launchCask(appDir, temporaryRoot);
+      await verifySentinel(temporaryRoot, "Cask rollback");
+    } else {
+      await installCask("install", candidateCask, appDir, brewEnvironment);
+      await launchCask(appDir, temporaryRoot);
+    }
     await brew(["uninstall", "--cask", "--force", "orchetrace"], brewEnvironment);
     caskAttempted = false;
     if (await brewInstalled("--cask", brewEnvironment)) {
       throw new Error("Homebrew Cask uninstall left orchetrace installed");
     }
 
-    return { releaseVersion, target };
+    return { releaseVersion, target, caskBaseline: caskBaseline?.version };
   } finally {
     if (caskAttempted) {
       await ignoreFailure(() => brew(["uninstall", "--cask", "--force", "orchetrace"], brewEnvironment));
@@ -126,6 +146,68 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+async function verifyFormula(expectedVersion, temporaryRoot, environment) {
+  const { stdout: versions } = await brew(["list", "--formula", "--versions", "orchetrace"], environment);
+  if (!versions.split(/\s+/u).includes(expectedVersion)) {
+    throw new Error(`Homebrew Formula version mismatch: expected ${expectedVersion}, received ${versions.trim()}`);
+  }
+  const { stdout } = await brew(["--prefix", "orchetrace"], environment);
+  await verifyCli(path.join(stdout.trim(), "bin"), temporaryRoot);
+}
+
+function installCask(operation, definition, appDir, environment) {
+  return brew(homebrewCaskCommand(operation, definition, appDir), environment);
+}
+
+export function homebrewCaskCommand(operation, definition, appDir) {
+  return [
+    operation,
+    "--cask",
+    ...(operation === "install" ? ["--no-quarantine"] : []),
+    `--appdir=${appDir}`,
+    definition,
+  ];
+}
+
+async function verifyCaskVersion(expectedVersion, environment) {
+  const { stdout } = await brew(["list", "--cask", "--versions", "orchetrace"], environment);
+  if (!stdout.split(/\s+/u).includes(expectedVersion)) {
+    throw new Error(`Homebrew Cask version mismatch: expected ${expectedVersion}, received ${stdout.trim()}`);
+  }
+}
+
+async function launchCask(appDir, temporaryRoot) {
+  const executable = path.join(appDir, "Orchetrace.app", "Contents", "MacOS", "orchetrace-desktop");
+  await access(executable);
+  await launchUntilSettled(executable, {
+    ...process.env,
+    HOME: path.join(temporaryRoot, "home"),
+    ORCHETRACE_APP_DATA_DIR: path.join(temporaryRoot, "app-data"),
+    ORCHETRACE_DATA_DIR: path.join(temporaryRoot, "data"),
+    ORCHETRACE_AUTOSTART: "0",
+  }, 3_000, [], path.dirname(executable));
+}
+
+async function verifySentinel(temporaryRoot, phase) {
+  const value = await readFile(path.join(temporaryRoot, "app-data", "homebrew-sentinel.txt"), "utf8");
+  if (value !== "preserve\n") throw new Error(`${phase} did not preserve application data`);
+}
+
+async function loadCaskBaseline(directory) {
+  const baselineRoot = path.resolve(directory);
+  try {
+    await access(path.join(baselineRoot, ".no-baseline"));
+    return undefined;
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") throw error;
+  }
+  const metadata = JSON.parse(await readFile(path.join(baselineRoot, "baseline.json"), "utf8"));
+  return {
+    version: normalizeVersion(metadata.tag),
+    dmg: path.join(baselineRoot, metadata.installer),
+  };
 }
 
 async function verifyCli(binDir, temporaryRoot) {
@@ -199,9 +281,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     version: requiredArgument(args, "--version"),
     assetsDir: requiredArgument(args, "--assets-dir"),
     definitionsDir: requiredArgument(args, "--definitions-dir"),
+    baselineRoot: typeof args.get("--baseline-root") === "string" ? args.get("--baseline-root") : undefined,
   });
   console.log(
-    `Verified Homebrew Formula and Cask install/start/uninstall for ` +
-    `${result.releaseVersion} (${result.target}).`,
+    `Verified Homebrew Formula and Cask install/upgrade/rollback/uninstall for ` +
+    `${result.releaseVersion} (${result.target})${result.caskBaseline ? ` from ${result.caskBaseline}` : ""}.`,
   );
 }

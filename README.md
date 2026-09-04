@@ -398,7 +398,7 @@ cargo tauri build --ci \
 
 推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。Tauri 打包完成后还会原生解包 DMG、DEB 或 MSI，验证最终安装器内的桌面主程序、签名、Node.js 22、`otrace` 和五套 Adapter；随后在隔离 HOME 与数据目录、禁用自动 Ingest 的条件下启动最终桌面程序，Linux 使用临时 Xvfb 显示环境。已验证的安装器会作为 Actions artifact 交给后续任务，避免重新下载尚未公开的草稿 Release。
 
-标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask：Formula 必须完成安装、`orche`/`otrace` 启动和卸载，Cask 必须安装到临时 Applications、启动隔离桌面进程并卸载。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
+标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask。Formula 使用同一候选 CLI 归档的基线版本定义验证安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 使用最近公开 Release 的真实 DMG 完成上一版安装、候选升级、上一版回滚、隔离桌面启动与共享数据保留。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
 
 当仓库已经存在上一版非草稿 Release 时，四个平台还会自动下载包含对应架构安装器的最近版本，在同一隔离 HOME/App Data 上依次启动“上一版 → 当前候选版 → 上一版”，验证升级和回滚后数据仍被保留。首个 Release 没有可用基线时会写入明确的 first-release 结果，而不会伪造历史版本。
 
@@ -554,7 +554,7 @@ otrace diagnostics --db /path/to/orchetrace.db --output diagnostics.json
 - Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
 - 从源码单独运行 DeepSeek Harness watcher 仍依赖 `zstd` CLI；桌面安装包已通过内置 `otrace` 解压，精确的瞬时 Agent status 仍需要 Cordis Observer；
-- npm CLI、桌面安装器与 Homebrew Formula/Cask 已进入安装和启动门禁；桌面安装器还会以最近公开 Release 为基线验证四平台升级、回滚和共享数据保留。Developer ID/Windows 正式证书、macOS notarization、自动更新以及 Homebrew 跨版本升级回滚尚未完成；
+- npm CLI、桌面安装器与 Homebrew Formula/Cask 已进入安装、启动、升级和回滚门禁；桌面安装器与 Cask 使用最近公开 Release 验证真实二进制切换，Formula 验证同一候选归档的 Homebrew 版本事务。Developer ID/Windows 正式证书、macOS notarization、自动更新，以及首次发布 CLI 归档后的 Formula 历史二进制升级验证尚未完成；
 - Orchetrace 仍是工作名称，公开发行前需要完成包名和商标检查。
 
 ## License

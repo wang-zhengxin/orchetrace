@@ -174,8 +174,13 @@ jobs:
           node scripts/generate-homebrew.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --output dist/homebrew --require-cask
           brew style dist/homebrew/Formula/orchetrace.rb dist/homebrew/Casks/orchetrace.rb
 
+      - name: Download previous Cask baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "${{ github.ref_name }}" --target aarch64-apple-darwin --output dist/homebrew-baseline
+
       - name: Verify Homebrew Formula and Cask installation
-        run: node scripts/smoke-homebrew-lifecycle.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew
+        run: node scripts/smoke-homebrew-lifecycle.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew --baseline-root dist/homebrew-baseline
 
   desktop-version-lifecycle:
     name: ${{ matrix.label }} version lifecycle
