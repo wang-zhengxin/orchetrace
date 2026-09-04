@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -47,15 +47,19 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
   const candidateFormula = path.join(temporaryRoot, "Formula", "candidate", "orchetrace.rb");
   const baselineCask = path.join(temporaryRoot, "Casks", "baseline", "orchetrace.rb");
   const candidateCask = path.join(temporaryRoot, "Casks", "candidate", "orchetrace.rb");
+  const tapName = "orchetrace/lifecycle";
+  const qualifiedToken = `${tapName}/orchetrace`;
   const appDir = path.join(temporaryRoot, "Applications");
   const brewEnvironment = {
     ...process.env,
     HOMEBREW_NO_ANALYTICS: "1",
     HOMEBREW_NO_AUTO_UPDATE: "1",
+    HOMEBREW_NO_INSTALL_FROM_API: "1",
     HOMEBREW_NO_INSTALL_CLEANUP: "1",
   };
   let formulaAttempted = false;
   let caskAttempted = false;
+  let tapCreated = false;
 
   try {
     if (await brewInstalled("--formula", brewEnvironment) ||
@@ -98,12 +102,26 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
       }));
     }
 
+    await brew(["tap-new", tapName, "--no-git"], brewEnvironment);
+    tapCreated = true;
+    const { stdout: tapOutput } = await brew(["--repository", tapName], brewEnvironment);
+    const tapRoot = tapOutput.trim();
+    const tapFormula = path.join(tapRoot, "Formula", "orchetrace.rb");
+    const tapCask = path.join(tapRoot, "Casks", "orchetrace.rb");
+    await Promise.all([
+      mkdir(path.dirname(tapFormula), { recursive: true }),
+      mkdir(path.dirname(tapCask), { recursive: true }),
+    ]);
+
     formulaAttempted = true;
-    await brew(["install", "--formula", "--build-from-source", baselineFormula], brewEnvironment);
+    await copyFile(baselineFormula, tapFormula);
+    await brew(["install", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
     await verifyFormula("0.0.0-lifecycle.0", temporaryRoot, brewEnvironment);
-    await brew(["upgrade", "--formula", "--build-from-source", candidateFormula], brewEnvironment);
+    await copyFile(candidateFormula, tapFormula);
+    await brew(["upgrade", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
     await verifyFormula(releaseVersion, temporaryRoot, brewEnvironment);
-    await brew(["reinstall", "--formula", "--build-from-source", baselineFormula], brewEnvironment);
+    await copyFile(baselineFormula, tapFormula);
+    await brew(["reinstall", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
     await verifyFormula("0.0.0-lifecycle.0", temporaryRoot, brewEnvironment);
     await brew(["uninstall", "--formula", "--force", "orchetrace"], brewEnvironment);
     formulaAttempted = false;
@@ -113,21 +131,25 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
 
     caskAttempted = true;
     if (caskBaseline) {
-      await installCask("install", baselineCask, appDir, brewEnvironment);
+      await copyFile(baselineCask, tapCask);
+      await installCask("install", qualifiedToken, appDir, brewEnvironment);
       await verifyCaskVersion(caskBaseline.version, brewEnvironment);
       await launchCask(appDir, temporaryRoot);
       await mkdir(path.join(temporaryRoot, "app-data"), { recursive: true });
       await writeFile(path.join(temporaryRoot, "app-data", "homebrew-sentinel.txt"), "preserve\n");
-      await installCask("upgrade", candidateCask, appDir, brewEnvironment);
+      await copyFile(candidateCask, tapCask);
+      await installCask("upgrade", qualifiedToken, appDir, brewEnvironment);
       await verifyCaskVersion(releaseVersion, brewEnvironment);
       await launchCask(appDir, temporaryRoot);
       await verifySentinel(temporaryRoot, "Cask upgrade");
-      await installCask("reinstall", baselineCask, appDir, brewEnvironment);
+      await copyFile(baselineCask, tapCask);
+      await installCask("reinstall", qualifiedToken, appDir, brewEnvironment);
       await verifyCaskVersion(caskBaseline.version, brewEnvironment);
       await launchCask(appDir, temporaryRoot);
       await verifySentinel(temporaryRoot, "Cask rollback");
     } else {
-      await installCask("install", candidateCask, appDir, brewEnvironment);
+      await copyFile(candidateCask, tapCask);
+      await installCask("install", qualifiedToken, appDir, brewEnvironment);
       await launchCask(appDir, temporaryRoot);
     }
     await brew(["uninstall", "--cask", "--force", "orchetrace"], brewEnvironment);
@@ -143,6 +165,9 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
     }
     if (formulaAttempted) {
       await ignoreFailure(() => brew(["uninstall", "--formula", "--force", "orchetrace"], brewEnvironment));
+    }
+    if (tapCreated) {
+      await ignoreFailure(() => brew(["untap", "--force", tapName], brewEnvironment));
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }

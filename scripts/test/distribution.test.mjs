@@ -106,9 +106,10 @@ test("Homebrew definitions pin immutable release assets and runtime paths", () =
 });
 
 test("CI and release jobs gate the real npm install lifecycle", async () => {
-  const [ci, release] = await Promise.all([
+  const [ci, release, homebrewLifecycle] = await Promise.all([
     readFile(resolve(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8"),
     readFile(resolve(import.meta.dirname, "../../.github/workflows/release.yml"), "utf8"),
+    readFile(resolve(import.meta.dirname, "../smoke-homebrew-lifecycle.mjs"), "utf8"),
   ]);
   assert.match(
     ci,
@@ -134,6 +135,8 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   assert.match(release, /xvfb/u);
   assert.match(release, /name: Homebrew installation lifecycle/u);
   assert.match(release, /smoke-homebrew-lifecycle\.mjs/u);
+  assert.match(homebrewLifecycle, /brew\(\["tap-new", tapName, "--no-git"\]/u);
+  assert.match(homebrewLifecycle, /brew\(\["untap", "--force", tapName\]/u);
   assert.match(release, /--baseline-root dist\/homebrew-baseline/u);
   assert.match(release, /pattern: installer-\*-apple-darwin/u);
   assert.doesNotMatch(release, /gh release download/u);
