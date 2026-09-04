@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -43,4 +45,19 @@ test("Homebrew definitions pin immutable release assets and runtime paths", () =
   });
   assert.match(cask, /arch arm: "aarch64", intel: "x64"/);
   assert.match(cask, /Orchetrace_0\.1\.0_#\{arch\}\.dmg/);
+});
+
+test("CI and release jobs gate the real npm install lifecycle", async () => {
+  const [ci, release] = await Promise.all([
+    readFile(resolve(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8"),
+    readFile(resolve(import.meta.dirname, "../../.github/workflows/release.yml"), "utf8"),
+  ]);
+  assert.match(
+    ci,
+    /smoke-install-lifecycle\.mjs --target x86_64-unknown-linux-gnu/u,
+  );
+  assert.match(
+    release,
+    /smoke-install-lifecycle\.mjs --target \$\{\{ matrix\.target \}\}/u,
+  );
 });

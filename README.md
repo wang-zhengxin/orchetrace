@@ -7,7 +7,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 
 它不是 Agent 编排器，也不替代各运行时自己的交互界面。Orchetrace 只观察运行时已经产生的事实，并将它们转换为一致、可回放的诊断视图。
 
-> 当前状态：`0.1.0-beta candidate`。核心链路、数据治理和五运行时 Adapter 已可运行；跨平台安装包流水线已经建立，正式签名、notarization、升级与回滚验证仍在加固中。
+> 当前状态：`0.1.0-beta candidate`。核心链路、数据治理和五运行时 Adapter 已可运行；跨平台安装包流水线与 npm 安装生命周期门禁已经建立，桌面签名、notarization、升级与回滚验证仍在加固中。
 
 完整使用、运维、扩展与故障排查说明见 [Orchetrace Wiki](wiki/Home.md)。
 
@@ -396,7 +396,7 @@ cargo tauri build --ci \
 
 安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
 
-推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并验证 `orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。草稿只有在四个平台完成安装、启动、升级和卸载烟测后才应公开。
+推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。任何阶段失败都会阻止对应发布任务。
 
 设置仓库变量 `NPM_PUBLISH=true` 后，流水线会按“平台包优先、主包最后”的顺序发布 `@orchetrace/cli@beta`，并启用 npm provenance。设置 `HOMEBREW_PUBLISH=true` 和具备 `wang-zhengxin/homebrew-tap` 写权限的 `HOMEBREW_TAP_TOKEN` 后，会依据 Release 中不可变资产的 SHA-256 自动更新 Formula 与 Cask。未设置这些开关时仍会构建、打包和验证，避免误发布。
 
@@ -410,6 +410,11 @@ node scripts/build-cli-bundle.mjs \
   --version 0.1.0-beta.4
 
 node scripts/stage-npm-packages.mjs \
+  --target aarch64-apple-darwin \
+  --bundle dist/cli/aarch64-apple-darwin/orchetrace \
+  --version 0.1.0-beta.4
+
+node scripts/smoke-install-lifecycle.mjs \
   --target aarch64-apple-darwin \
   --bundle dist/cli/aarch64-apple-darwin/orchetrace \
   --version 0.1.0-beta.4
@@ -527,7 +532,7 @@ otrace diagnostics --db /path/to/orchetrace.db --output diagnostics.json
 - Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
 - 从源码单独运行 DeepSeek Harness watcher 仍依赖 `zstd` CLI；桌面安装包已通过内置 `otrace` 解压，精确的瞬时 Agent status 仍需要 Cordis Observer；
-- Tauri bundle 与四平台构建矩阵已完成；Developer ID/Windows 证书签名、macOS notarization、自动更新和跨平台升级回滚验证尚未完成；
+- npm CLI 已进入四平台安装、升级、回滚和卸载门禁；Developer ID/Windows 证书签名、macOS notarization、自动更新以及桌面/Homebrew 实体升级回滚验证尚未完成；
 - Orchetrace 仍是工作名称，公开发行前需要完成包名和商标检查。
 
 ## License

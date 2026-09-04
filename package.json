@@ -43,6 +43,7 @@
     "cli:bundle": "node scripts/build-cli-bundle.mjs",
     "npm:stage": "node scripts/stage-npm-packages.mjs",
     "npm:publish": "node scripts/publish-npm.mjs",
+    "distribution:lifecycle": "node scripts/smoke-install-lifecycle.mjs",
     "desktop:dev": "node scripts/run-desktop.mjs run",
     "desktop:check": "node scripts/run-desktop.mjs check",
     "tui": "cargo run -q -p orchetrace-cli --bin orche --",

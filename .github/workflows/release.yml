@@ -92,6 +92,9 @@ jobs:
           node scripts/build-cli-bundle.mjs --target ${{ matrix.target }} --version ${{ env.ORCHETRACE_RELEASE_VERSION }} --skip-build
           node scripts/stage-npm-packages.mjs --target ${{ matrix.target }} --bundle dist/cli/${{ matrix.target }}/orchetrace --version ${{ env.ORCHETRACE_RELEASE_VERSION }}
 
+      - name: Verify install, upgrade, rollback, and uninstall
+        run: node scripts/smoke-install-lifecycle.mjs --target ${{ matrix.target }} --bundle dist/cli/${{ matrix.target }}/orchetrace --version ${{ env.ORCHETRACE_RELEASE_VERSION }}
+
       - name: Preserve distribution artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -111,7 +114,7 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: "Orchetrace v__VERSION__ Beta"
           releaseBody: |
-            Beta desktop build for Claude Code, Codex, Pi, and DeepSeek Harness observability.
+            Beta desktop build for Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity observability.
 
             This draft is intentionally unpublished until installation and upgrade smoke tests pass.
           releaseDraft: true
