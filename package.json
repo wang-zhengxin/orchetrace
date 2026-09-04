@@ -41,6 +41,7 @@
     "desktop:release:verify": "node scripts/verify-release.mjs",
     "desktop:artifact:verify": "node scripts/verify-desktop-artifact.mjs",
     "desktop:launch:smoke": "node scripts/smoke-desktop-launch.mjs",
+    "homebrew:lifecycle:smoke": "node scripts/smoke-homebrew-lifecycle.mjs",
     "distribution:test": "node --test scripts/test/*.test.mjs",
     "cli:bundle": "node scripts/build-cli-bundle.mjs",
     "npm:stage": "node scripts/stage-npm-packages.mjs",

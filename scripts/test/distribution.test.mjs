@@ -45,6 +45,23 @@ test("Homebrew definitions pin immutable release assets and runtime paths", () =
   });
   assert.match(cask, /arch arm: "aarch64", intel: "x64"/);
   assert.match(cask, /Orchetrace_0\.1\.0_#\{arch\}\.dmg/);
+
+  const localFormula = renderHomebrewFormula({
+    ...common,
+    arm: { ...common.arm, url: "file:///tmp/orchetrace-arm.tar.gz" },
+    intel: { ...common.intel, url: "file:///tmp/orchetrace-intel.tar.gz" },
+  });
+  assert.match(localFormula, /url "file:\/\/\/tmp\/orchetrace-arm\.tar\.gz"/);
+  assert.match(localFormula, /url "file:\/\/\/tmp\/orchetrace-intel\.tar\.gz"/);
+
+  const localCask = renderHomebrewCask({
+    ...common,
+    arm: { name: "Orchetrace_0.1.0_aarch64.dmg", sha256: "c".repeat(64) },
+    intel: { name: "Orchetrace_0.1.0_x64.dmg", sha256: "d".repeat(64) },
+    url: "file:///tmp/Orchetrace.dmg",
+  });
+  assert.match(localCask, /url "file:\/\/\/tmp\/Orchetrace\.dmg"/);
+  assert.doesNotMatch(localCask, /verified:/);
 });
 
 test("CI and release jobs gate the real npm install lifecycle", async () => {
@@ -74,4 +91,8 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   );
   assert.match(release, /xauth/u);
   assert.match(release, /xvfb/u);
+  assert.match(release, /name: Homebrew installation lifecycle/u);
+  assert.match(release, /smoke-homebrew-lifecycle\.mjs/u);
+  assert.match(release, /pattern: installer-\*-apple-darwin/u);
+  assert.doesNotMatch(release, /gh release download/u);
 });

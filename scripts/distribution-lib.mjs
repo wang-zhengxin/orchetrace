@@ -96,16 +96,18 @@ export function resolveFrom(root, value, fallback) {
 
 export function renderHomebrewFormula({ version, repository, arm, intel }) {
   const releaseVersion = normalizeVersion(version);
+  const armUrl = arm.url ?? `https://github.com/${repository}/releases/download/v${releaseVersion}/${arm.name}`;
+  const intelUrl = intel.url ?? `https://github.com/${repository}/releases/download/v${releaseVersion}/${intel.name}`;
   return `class Orchetrace < Formula
   desc "Observe Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity agents"
   homepage "https://github.com/${repository}"
   version "${releaseVersion}"
 
   if Hardware::CPU.arm?
-    url "https://github.com/${repository}/releases/download/v${releaseVersion}/${arm.name}"
+    url ${JSON.stringify(armUrl)}
     sha256 "${arm.sha256}"
   else
-    url "https://github.com/${repository}/releases/download/v${releaseVersion}/${intel.name}"
+    url ${JSON.stringify(intelUrl)}
     sha256 "${intel.sha256}"
   end
 
@@ -134,8 +136,10 @@ end
 `;
 }
 
-export function renderHomebrewCask({ version, repository, arm, intel }) {
+export function renderHomebrewCask({ version, repository, arm, intel, url }) {
   const releaseVersion = normalizeVersion(version);
+  const downloadUrl = url ?? `https://github.com/${repository}/releases/download/v#{version}/${arm.name.replace("aarch64", "#{arch}")}`;
+  const verified = url ? "" : `,\n      verified: "github.com/${repository}/"`;
   return `cask "orchetrace" do
   arch arm: "aarch64", intel: "x64"
 
@@ -143,8 +147,7 @@ export function renderHomebrewCask({ version, repository, arm, intel }) {
   sha256 arm:   "${arm.sha256}",
          intel: "${intel.sha256}"
 
-  url "https://github.com/${repository}/releases/download/v#{version}/${arm.name.replace("aarch64", "#{arch}")}",
-      verified: "github.com/${repository}/"
+  url ${JSON.stringify(downloadUrl)}${verified}
   name "Orchetrace"
   desc "Local-first multi-Agent observability desktop application"
   homepage "https://github.com/${repository}"

@@ -129,10 +129,58 @@ jobs:
       - name: Verify isolated desktop launch
         run: node scripts/smoke-desktop-launch.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
 
+      - name: Preserve verified desktop installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+
+  homebrew:
+    name: Homebrew installation lifecycle
+    if: github.ref_type == 'tag'
+    needs: desktop
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up official Node.js runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Download macOS CLI bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: distribution-*-apple-darwin
+          path: dist/homebrew-assets
+          merge-multiple: true
+
+      - name: Download macOS desktop installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: installer-*-apple-darwin
+          path: dist/homebrew-assets
+          merge-multiple: true
+
+      - name: Generate and style Homebrew definitions
+        run: |
+          node scripts/generate-homebrew.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --output dist/homebrew --require-cask
+          brew style dist/homebrew/Formula/orchetrace.rb dist/homebrew/Casks/orchetrace.rb
+
+      - name: Verify Homebrew Formula and Cask installation
+        run: node scripts/smoke-homebrew-lifecycle.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew
+
   distribution:
     name: Publish CLI, npm, and Homebrew metadata
     if: github.ref_type == 'tag'
-    needs: desktop
+    needs: [desktop, homebrew]
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -163,10 +211,12 @@ jobs:
         run: |
           gh release upload "$GITHUB_REF_NAME" dist/distribution/cli/artifacts/*.tar.gz dist/distribution/cli/artifacts/*.sha256 --clobber
 
-      - name: Download desktop DMGs for Homebrew metadata
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release download "$GITHUB_REF_NAME" --pattern "*.dmg" --dir dist/distribution/cli/artifacts --clobber
+      - name: Download verified desktop DMGs for Homebrew metadata
+        uses: actions/download-artifact@v8
+        with:
+          pattern: installer-*-apple-darwin
+          path: dist/distribution/cli/artifacts
+          merge-multiple: true
 
       - name: Generate Homebrew Formula and Cask
         run: node scripts/generate-homebrew.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/distribution/cli/artifacts --output dist/homebrew --require-cask

@@ -20,9 +20,10 @@ const repository = args.get("--repository") ?? "wang-zhengxin/orchetrace";
 const assetsDir = path.resolve(requiredArgument(args, "--assets-dir"));
 const output = resolveFrom(root, args.get("--output"), "dist/homebrew");
 
+const assetFiles = await walkFiles(assetsDir);
 const formulaAssets = {
-  arm: await asset(cliArchiveName(version, "aarch64-apple-darwin")),
-  intel: await asset(cliArchiveName(version, "x86_64-apple-darwin")),
+  arm: await namedAsset(cliArchiveName(version, "aarch64-apple-darwin")),
+  intel: await namedAsset(cliArchiveName(version, "x86_64-apple-darwin")),
 };
 await mkdir(path.join(output, "Formula"), { recursive: true });
 await writeFile(
@@ -30,9 +31,8 @@ await writeFile(
   renderHomebrewFormula({ version, repository, ...formulaAssets }),
 );
 
-const names = await readdir(assetsDir);
-const armDmg = names.find((name) => name.endsWith(".dmg") && name.includes("aarch64"));
-const intelDmg = names.find((name) => name.endsWith(".dmg") && name.includes("x64"));
+const armDmg = assetFiles.find((file) => file.endsWith(".dmg") && path.basename(file).includes("aarch64"));
+const intelDmg = assetFiles.find((file) => file.endsWith(".dmg") && path.basename(file).includes("x64"));
 if (armDmg && intelDmg) {
   await mkdir(path.join(output, "Casks"), { recursive: true });
   await writeFile(
@@ -50,7 +50,29 @@ if (armDmg && intelDmg) {
 
 console.log(`Generated Homebrew Formula${armDmg && intelDmg ? " and Cask" : ""} in ${path.relative(root, output)}`);
 
-async function asset(name) {
-  const bytes = await readFile(path.join(assetsDir, name));
-  return { name, sha256: createHash("sha256").update(bytes).digest("hex") };
+async function namedAsset(name) {
+  const matches = assetFiles.filter((file) => path.basename(file) === name);
+  if (matches.length !== 1) {
+    throw new Error(`expected one ${name} below ${assetsDir}, found ${matches.length}`);
+  }
+  return asset(matches[0]);
+}
+
+async function asset(file) {
+  const bytes = await readFile(file);
+  return { name: path.basename(file), sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
+async function walkFiles(directory) {
+  const files = [];
+  const pending = [directory];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) pending.push(entryPath);
+      else if (entry.isFile()) files.push(entryPath);
+    }
+  }
+  return files;
 }
