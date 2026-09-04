@@ -2,6 +2,11 @@ name: Desktop Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate semantic version used for artifacts and baseline selection
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -61,9 +66,11 @@ jobs:
 
       - name: Expose portable Node.js binary
         shell: bash
+        env:
+          ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
         run: |
           node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_NODE=' + process.execPath + '\n')"
-          node -e "const p=require('./package.json'); const r=process.env.GITHUB_REF_TYPE==='tag'?process.env.GITHUB_REF_NAME.replace(/^v/,''):p.version; require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_VERSION=' + r + '\n')"
+          node scripts/release-context.mjs
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
@@ -107,6 +114,7 @@ jobs:
             dist/npm/tarballs/
 
       - name: Build installers and create draft release
+        if: github.ref_type == 'tag'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,6 +129,15 @@ jobs:
             This draft is intentionally unpublished until installation and upgrade smoke tests pass.
           releaseDraft: true
           prerelease: true
+          args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+      - name: Build preview installers without creating a release
+        if: github.event_name == 'workflow_dispatch'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
+        with:
+          projectPath: apps/desktop
           args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
 
       - name: Verify final desktop installer contents
@@ -141,7 +158,6 @@ jobs:
 
   homebrew:
     name: Homebrew installation lifecycle
-    if: github.ref_type == 'tag'
     needs: desktop
     runs-on: macos-15
     timeout-minutes: 30
@@ -154,6 +170,11 @@ jobs:
         with:
           node-version: 22.23.2
           package-manager-cache: false
+
+      - name: Resolve release context
+        env:
+          ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
+        run: node scripts/release-context.mjs
 
       - name: Download macOS CLI bundles
         uses: actions/download-artifact@v8
@@ -171,20 +192,19 @@ jobs:
 
       - name: Generate and style Homebrew definitions
         run: |
-          node scripts/generate-homebrew.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --output dist/homebrew --require-cask
+          node scripts/generate-homebrew.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/homebrew-assets --output dist/homebrew --require-cask
           brew style dist/homebrew/Formula/orchetrace.rb dist/homebrew/Casks/orchetrace.rb
 
       - name: Download previous Cask baseline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "${{ github.ref_name }}" --target aarch64-apple-darwin --output dist/homebrew-baseline
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "$ORCHETRACE_CURRENT_TAG" --target aarch64-apple-darwin --output dist/homebrew-baseline
 
       - name: Verify Homebrew Formula and Cask installation
-        run: node scripts/smoke-homebrew-lifecycle.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew --baseline-root dist/homebrew-baseline
+        run: node scripts/smoke-homebrew-lifecycle.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew --baseline-root dist/homebrew-baseline
 
   desktop-version-lifecycle:
     name: ${{ matrix.label }} version lifecycle
-    if: github.ref_type == 'tag'
     needs: desktop
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 30
@@ -225,6 +245,11 @@ jobs:
           node-version: 22.23.2
           package-manager-cache: false
 
+      - name: Resolve release context
+        env:
+          ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
+        run: node scripts/release-context.mjs
+
       - name: Download candidate installer
         uses: actions/download-artifact@v8
         with:
@@ -234,14 +259,13 @@ jobs:
       - name: Download latest compatible release baseline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "${{ github.ref_name }}" --target "${{ matrix.target }}" --output dist/desktop-baseline
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "$ORCHETRACE_CURRENT_TAG" --target "${{ matrix.target }}" --output dist/desktop-baseline
 
       - name: Verify baseline, candidate, rollback, and shared data
         run: node scripts/smoke-desktop-version-lifecycle.mjs --target "${{ matrix.target }}" --baseline-root dist/desktop-baseline --candidate-root dist/desktop-candidate
 
   distribution:
-    name: Publish CLI, npm, and Homebrew metadata
-    if: github.ref_type == 'tag'
+    name: Assemble release candidate
     needs: [desktop, homebrew, desktop-version-lifecycle]
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -257,8 +281,9 @@ jobs:
           package-manager-cache: false
 
       - name: Resolve release version
-        shell: bash
-        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'ORCHETRACE_RELEASE_VERSION=' + process.env.GITHUB_REF_NAME.replace(/^v/,'') + '\n')"
+        env:
+          ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
+        run: node scripts/release-context.mjs
 
       - name: Download CLI and npm artifacts
         uses: actions/download-artifact@v8
@@ -268,33 +293,49 @@ jobs:
           merge-multiple: true
 
       - name: Upload portable CLI bundles to draft release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$GITHUB_REF_NAME" dist/distribution/cli/artifacts/*.tar.gz dist/distribution/cli/artifacts/*.sha256 --clobber
 
-      - name: Download verified desktop DMGs for Homebrew metadata
+      - name: Download verified desktop installers
         uses: actions/download-artifact@v8
         with:
-          pattern: installer-*-apple-darwin
-          path: dist/distribution/cli/artifacts
+          pattern: installer-*
+          path: dist/distribution/installers
           merge-multiple: true
 
       - name: Generate Homebrew Formula and Cask
-        run: node scripts/generate-homebrew.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/distribution/cli/artifacts --output dist/homebrew --require-cask
+        run: node scripts/generate-homebrew.mjs --version "$ORCHETRACE_RELEASE_VERSION" --assets-dir dist/distribution --output dist/homebrew --require-cask
 
       - name: Stage main npm package
         run: node scripts/stage-npm-packages.mjs --version "$ORCHETRACE_RELEASE_VERSION" --output dist/npm-main
 
+      - name: Generate validated candidate summary
+        run: node scripts/summarize-release-candidate.mjs --version "$ORCHETRACE_RELEASE_VERSION" --mode "$ORCHETRACE_RELEASE_MODE" --assets-dir dist --output dist/release-summary
+
+      - name: Preserve complete release candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/release-summary/
+            dist/distribution/
+            dist/homebrew/
+            dist/npm-main/tarballs/
+
       - name: Publish npm beta packages with provenance
-        if: vars.NPM_PUBLISH == 'true'
+        if: github.ref_type == 'tag' && vars.NPM_PUBLISH == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
         run: node scripts/publish-npm.mjs --version "$ORCHETRACE_RELEASE_VERSION" --platform-dir dist/distribution/npm/tarballs --main-dir dist/npm-main/tarballs --tag beta
 
       - name: Check out Homebrew tap
-        if: vars.HOMEBREW_PUBLISH == 'true'
+        if: github.ref_type == 'tag' && vars.HOMEBREW_PUBLISH == 'true'
         uses: actions/checkout@v6
         with:
           repository: wang-zhengxin/homebrew-tap
@@ -302,7 +343,7 @@ jobs:
           path: dist/homebrew-tap
 
       - name: Update Homebrew tap
-        if: vars.HOMEBREW_PUBLISH == 'true'
+        if: github.ref_type == 'tag' && vars.HOMEBREW_PUBLISH == 'true'
         working-directory: dist/homebrew-tap
         run: |
           mkdir -p Formula Casks

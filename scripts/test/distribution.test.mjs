@@ -100,4 +100,11 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   assert.match(release, /download-desktop-baseline\.mjs/u);
   assert.match(release, /smoke-desktop-version-lifecycle\.mjs/u);
   assert.match(release, /needs: \[desktop, homebrew, desktop-version-lifecycle\]/u);
+  assert.match(release, /Build preview installers without creating a release/u);
+  assert.match(release, /ORCHETRACE_PREVIEW_VERSION: \$\{\{ inputs\.version \}\}/u);
+  assert.match(release, /release-context\.mjs/u);
+  assert.match(release, /summarize-release-candidate\.mjs/u);
+  assert.match(release, /name: release-candidate-\$\{\{ github\.run_id \}\}/u);
+  assert.match(release, /if: github\.ref_type == 'tag' && vars\.NPM_PUBLISH == 'true'/u);
+  assert.match(release, /if: github\.ref_type == 'tag' && vars\.HOMEBREW_PUBLISH == 'true'/u);
 });

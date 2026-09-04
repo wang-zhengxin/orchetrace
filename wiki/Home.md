@@ -107,6 +107,16 @@ npm 主包要求 Node.js 22，通过当前平台的 optional dependency 安装 R
 
 当前只发布 Beta 通道：npm 使用 `beta` dist-tag，Homebrew 使用项目 Tap，不进入 npm `latest` 或 Homebrew/core。首次发布前需要由维护者创建 npm `@orchetrace` scope、`wang-zhengxin/homebrew-tap` 仓库和相应发布凭据。
 
+### Release Preview
+
+在创建标签前，可以手动运行完整预发布演练：
+
+```bash
+gh workflow run release.yml -f version=0.1.0-beta.4
+```
+
+Preview 与标签发布共享四平台构建、安装器内容/启动、历史版本回滚和 Homebrew 生命周期门禁，但不创建 Git 标签、GitHub Release，不发布 npm，也不修改 Tap。完成后产生保留 14 天的 `release-candidate-<run-id>` artifact，其中包含安装器、CLI/npm 包、Formula/Cask，以及机器可读 JSON 和 Markdown SHA-256 摘要。只有 `v*` 标签触发才允许进入外部发布步骤。
+
 四平台 Release job 会在隔离前缀真实执行 npm CLI 的完整生命周期：安装基线版本、升级候选版本、回滚基线版本、卸载，并逐阶段检查 npm 命令 shim、主包/平台包版本、`orche --help` 和 `otrace`。本机已有 CLI 不会被覆盖。源码构建完 CLI bundle 后可手工运行：
 
 ```bash
@@ -608,6 +618,7 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - DMG、DEB、MSI 临时展开、隔离数据启动、进程回收与卸载无残留烟测。
 - Homebrew Formula/Cask 官方样式、实体安装、升级、回滚、命令或桌面启动与卸载门禁。
 - 四平台最近 Release → 当前候选 → 最近 Release 的升级、回滚和共享数据保留门禁。
+- 不创建 Release、不发布外部包的四平台 Release Preview 与候选产物 SHA-256 汇总。
 
 ### Beta 前待完成
 

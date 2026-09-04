@@ -396,7 +396,15 @@ cargo tauri build --ci \
 
 安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
 
-推送 `v*` 标签或手动运行 `Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建，并创建一个 `prerelease + draft` GitHub Release。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。Tauri 打包完成后还会原生解包 DMG、DEB 或 MSI，验证最终安装器内的桌面主程序、签名、Node.js 22、`otrace` 和五套 Adapter；随后在隔离 HOME 与数据目录、禁用自动 Ingest 的条件下启动最终桌面程序，Linux 使用临时 Xvfb 显示环境。已验证的安装器会作为 Actions artifact 交给后续任务，避免重新下载尚未公开的草稿 Release。
+`Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。Tauri 打包完成后还会原生解包 DMG、DEB 或 MSI，验证最终安装器内的桌面主程序、签名、Node.js 22、`otrace` 和五套 Adapter；随后在隔离 HOME 与数据目录、禁用自动 Ingest 的条件下启动最终桌面程序，Linux 使用临时 Xvfb 显示环境。已验证的安装器会作为 Actions artifact 交给后续任务。推送 `v*` 标签时还会创建一个 `prerelease + draft` GitHub Release。
+
+手动运行属于安全的 Release Preview：必须传入候选语义版本，完整执行四平台构建、安装器启动、历史版本回滚和 Homebrew 生命周期，但不创建 Git 标签或 GitHub Release，也不会发布 npm 或修改 Homebrew Tap。最终会生成 `release-candidate-<run-id>` Actions artifact，包含全部安装器、CLI/npm 包、Formula/Cask，以及逐文件大小和 SHA-256 摘要，保留 14 天：
+
+```bash
+gh workflow run release.yml -f version=0.1.0-beta.4
+```
+
+只有 `v*` 标签触发才会创建草稿 Release；npm 与 Tap 还分别需要显式仓库变量开关。
 
 标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask。Formula 使用同一候选 CLI 归档的基线版本定义验证安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 使用最近公开 Release 的真实 DMG 完成上一版安装、候选升级、上一版回滚、隔离桌面启动与共享数据保留。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
 

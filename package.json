@@ -43,6 +43,7 @@
     "desktop:launch:smoke": "node scripts/smoke-desktop-launch.mjs",
     "desktop:version:smoke": "node scripts/smoke-desktop-version-lifecycle.mjs",
     "homebrew:lifecycle:smoke": "node scripts/smoke-homebrew-lifecycle.mjs",
+    "release:summary": "node scripts/summarize-release-candidate.mjs",
     "distribution:test": "node --test scripts/test/*.test.mjs",
     "cli:bundle": "node scripts/build-cli-bundle.mjs",
     "npm:stage": "node scripts/stage-npm-packages.mjs",
