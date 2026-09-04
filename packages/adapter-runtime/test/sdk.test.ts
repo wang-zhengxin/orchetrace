@@ -98,6 +98,7 @@ test("all built-in adapter fixtures satisfy the shared lifecycle contract", () =
     [piAdapter, "pi"],
     [deepSeekHarnessAdapter, "dsh"],
     [codexAdapter, "codex"],
+    [antigravityAdapter, "antigravity"],
   ] as const;
   for (const [plugin, directory] of fixtures) {
     const path = resolve(import.meta.dirname, `../../../fixtures/${directory}/canonical-events.jsonl`);

@@ -1,0 +1,161 @@
+{
+  "$schema": "./compatibility.schema.json",
+  "schema_version": 1,
+  "runtimes": [
+    {
+      "id": "claude-code",
+      "coverage": "fixture-verified",
+      "version_basis": "observed-unversioned",
+      "formats": [
+        {
+          "id": "transcript-jsonl",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/claude/demo.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/claude/canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/claude-adapter/test/mapper.test.ts" },
+            { "kind": "test", "path": "packages/claude-adapter/test/loader.test.ts" }
+          ]
+        },
+        {
+          "id": "lifecycle-hooks",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "test", "path": "packages/claude-adapter/test/hook-integration.test.ts" },
+            { "kind": "test", "path": "packages/claude-adapter/test/live-observer.test.ts" }
+          ]
+        }
+      ],
+      "test_scripts": ["test:claude", "test:runtime-sdk"],
+      "unknown_record_policy": "Ignore unknown transcript record types; isolate malformed records as diagnostics.",
+      "limitations": [
+        "Upstream transcript and hook payloads do not declare a stable schema version.",
+        "Support is guaranteed only for the fixture-observed fields covered by the listed tests."
+      ]
+    },
+    {
+      "id": "pi",
+      "coverage": "fixture-verified",
+      "version_basis": "declared-schema",
+      "formats": [
+        {
+          "id": "session-jsonl",
+          "versions": ["1", "2", "3"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/pi/demo.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/pi/canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/pi-adapter/test/loader.test.ts" },
+            { "kind": "test", "path": "packages/pi-adapter/test/auto-discovery.test.ts" }
+          ]
+        },
+        {
+          "id": "orchetrace-telemetry",
+          "versions": ["1"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/pi/telemetry.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/pi/telemetry-canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/pi-telemetry-extension/test/extension.test.ts" }
+          ]
+        },
+        {
+          "id": "rpc-line-json",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "test", "path": "packages/pi-adapter/test/rpc-mapper.test.ts" },
+            { "kind": "test", "path": "packages/pi-adapter/test/live-bridge.test.ts" }
+          ]
+        }
+      ],
+      "test_scripts": ["test:pi", "test:pi-extension", "test:runtime-sdk"],
+      "unknown_record_policy": "Reject session versions newer than 3 and telemetry schemas newer than 1 with diagnostics.",
+      "limitations": [
+        "RPC line frames are observed rather than upstream-versioned.",
+        "Passive transcript mode cannot invent lifecycle facts that Pi did not persist."
+      ]
+    },
+    {
+      "id": "deepseek-harness",
+      "coverage": "fixture-verified",
+      "version_basis": "mixed",
+      "formats": [
+        {
+          "id": "observer-source-jsonl",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/dsh/source-events.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/dsh/canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/dsh-observer/test/mapper.test.ts" },
+            { "kind": "test", "path": "packages/dsh-observer/test/observer.test.ts" }
+          ]
+        },
+        {
+          "id": "session-jsonl-zstd",
+          "versions": ["1"],
+          "evidence": [
+            { "kind": "test", "path": "packages/dsh-observer/test/persistence.test.ts" }
+          ]
+        }
+      ],
+      "test_scripts": ["test:adapter", "test:runtime-sdk"],
+      "unknown_record_policy": "Keep supported records and report malformed or unsupported persistence records as diagnostics.",
+      "limitations": [
+        "The observer source stream is an integration contract and does not declare an upstream schema version.",
+        "Compressed persistence coverage is generated inside tests rather than stored as a binary fixture."
+      ]
+    },
+    {
+      "id": "codex",
+      "coverage": "fixture-verified",
+      "version_basis": "observed-unversioned",
+      "formats": [
+        {
+          "id": "rollout-jsonl",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/codex/root-rollout.jsonl" },
+            { "kind": "raw-fixture", "path": "fixtures/codex/subagent-rollout.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/codex/canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/codex-adapter/test/mapper.test.ts" },
+            { "kind": "test", "path": "packages/codex-adapter/test/observer.test.ts" }
+          ]
+        }
+      ],
+      "test_scripts": ["test:codex", "test:runtime-sdk"],
+      "unknown_record_policy": "Ignore unknown rollout record types while preserving source sequence continuity.",
+      "limitations": [
+        "Codex rollout JSONL does not declare a stable schema version.",
+        "Subagent lineage depends on persisted thread metadata and source paths."
+      ]
+    },
+    {
+      "id": "antigravity",
+      "coverage": "fixture-verified",
+      "version_basis": "observed-unversioned",
+      "formats": [
+        {
+          "id": "brain-transcript-jsonl",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "raw-fixture", "path": "fixtures/antigravity/root-transcript.jsonl" },
+            { "kind": "canonical-fixture", "path": "fixtures/antigravity/canonical-events.jsonl" },
+            { "kind": "test", "path": "packages/antigravity-adapter/test/mapper.test.ts" },
+            { "kind": "test", "path": "packages/antigravity-adapter/test/observer.test.ts" }
+          ]
+        },
+        {
+          "id": "named-hooks",
+          "versions": ["observed-unversioned"],
+          "evidence": [
+            { "kind": "test", "path": "packages/antigravity-adapter/test/hook-integration.test.ts" }
+          ]
+        }
+      ],
+      "test_scripts": ["test:antigravity", "test:runtime-sdk"],
+      "unknown_record_policy": "Ignore unknown transcript steps; isolate malformed or incomplete records as diagnostics.",
+      "limitations": [
+        "Antigravity transcript and hook payloads do not declare a stable schema version.",
+        "Support is based on locally observed brain transcript records and named hook payloads."
+      ]
+    }
+  ]
+}

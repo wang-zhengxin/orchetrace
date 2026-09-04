@@ -76,6 +76,18 @@ flowchart LR
 
 Pi 的普通对话分支不会被当成子 Agent。如果 Pi extension 没有发送 Orchetrace telemetry，界面不会仅根据工具名称猜测拓扑。
 
+### 上游格式兼容矩阵
+
+| Runtime | 已验证格式版本 | 版本依据 |
+|---|---|---|
+| Claude Code | transcript JSONL、生命周期 Hooks | 未声明版本，按 fixture 观测 |
+| Codex | rollout JSONL | 未声明版本，按 fixture 观测 |
+| Pi | session JSONL v1-v3、telemetry v1、RPC line JSON | 声明版本 + fixture 观测 |
+| DeepSeek Harness | observer source JSONL、session persistence v1 | 声明版本 + fixture 观测 |
+| Google Antigravity | brain transcript JSONL、named Hooks | 未声明版本，按 fixture 观测 |
+
+“已验证”只覆盖仓库中脱敏 fixture 所代表的字段组合，不把上游未声明版本的格式描述成稳定 API。机器可读来源是 [`runtimes/compatibility.json`](../runtimes/compatibility.json)，其中列出每种格式的 raw fixture、Canonical fixture、测试、未知记录策略和已知限制。`npm run compatibility:check` 会验证 Runtime Registry 覆盖完整、证据文件可访问、Canonical Event runtime/schema 一致以及测试脚本存在；它已经进入 `npm run check` 和 CI。
+
 ## 安装
 
 M7 提供 npm、Homebrew Formula 和 Homebrew Cask 三条 Beta 分发路径。相关包发布后可以执行：
@@ -487,6 +499,7 @@ Runtime 清单的唯一来源是 `runtimes/registry.json`。修改后运行：
 ```bash
 npm run runtime:generate
 npm run runtime:check
+npm run compatibility:check
 ```
 
 Adapter 使用 `@orchetrace/adapter-runtime` 定义：
@@ -508,8 +521,9 @@ Observer 需要实现 `start()`、`scanOnce()` 和 `stop()`。事件必须使用
 2. Mapper 测试；
 3. Replay、增量读取、截断和重启测试；
 4. 五运行时共享生命周期契约；
-5. Rust fold/projection 测试；
-6. 未知 required event 的显式 diagnostic。
+5. `runtimes/compatibility.json` 中对应的格式版本、证据和降级策略。
+6. Rust fold/projection 测试；
+7. 未知 required event 的显式 diagnostic。
 
 ## 常见问题
 
@@ -571,6 +585,7 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - TUI、Web、Tauri 删除最后一个 Session 后的统一空态与自动恢复生命周期。
 - 桌面 Runtime Diagnostics 的只读 Storage Doctor 与数据库健康摘要。
 - 固定数据库边界、两步确认、Ingest 停止门禁的桌面 repair，以及当前 Run 安全导出。
+- 上游 Runtime 机器可读兼容矩阵、五 Runtime fixture 证据闭环和 CI 发布门禁。
 
 ### Beta 前待完成
 
@@ -578,7 +593,6 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - 四平台实体安装、升级、回滚和卸载测试；
 - 自动更新通道与签名密钥轮换流程；
 - 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；
-- 上游 Runtime 多版本兼容矩阵；
 - 公开发布前的名称、包名和商标检查。
 
 ## 参与贡献

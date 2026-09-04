@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -8,9 +9,18 @@ const fixture = resolve(
   import.meta.dirname,
   "../../../fixtures/antigravity/root-transcript.jsonl",
 );
+const canonicalFixture = resolve(
+  import.meta.dirname,
+  "../../../fixtures/antigravity/canonical-events.jsonl",
+);
 
 test("maps an Antigravity transcript into lifecycle, tool, and subagent events", async () => {
   const result = await loadAntigravitySession(fixture, "antigravity-fixture");
+  const expected = (await readFile(canonicalFixture, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(result.events, expected);
   assert.equal(result.events.every((event) => event.runtime === "antigravity"), true);
   assert(result.events.some((event) => event.type === "session.discovered"));
   assert(result.events.some((event) => event.type === "prompt.accepted"));

@@ -33,6 +33,7 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 - WebSocket 实时通知，断开后自动降级为轮询；
 - Tauri 桌面壳、受管 `otrace` sidecar、五运行时自动发现和结构化诊断抽屉；
 - Adapter 健康度聚合、可定位的 severity/code/location 失败证据，以及五运行时共享的生命周期契约测试；
+- 机器可读的上游格式兼容矩阵，以 raw/canonical fixture 和 Adapter 测试作为 CI 发布门禁；
 - SQLite 事实体检、派生投影安全修复、按 Run 导出和不含会话正文的诊断包；
 - 直接嵌入当前终端的 `orche` TUI，支持拓扑、真实时间回放、多 Agent 时间泳道和侧边详情；
 - token 认证、loopback-only 监听和认证后的优雅退出。
@@ -48,6 +49,18 @@ Orchetrace 是一个本地优先的多 Agent 可观测工作台，统一展示 C
 | Google Antigravity (`agy`) | `transcript.jsonl` | 自动发现 + 350 ms 增量 watcher + 可选 Hooks | `invoke_subagent` 返回的 conversation ID |
 
 Pi 的普通对话分支不会被误判为子 Agent。只有 extension 提供显式 telemetry 时，Orchetrace 才展示 Pi 子 Agent 拓扑。
+
+### 兼容性边界
+
+| 运行时 | 已验证格式版本 | 版本依据 |
+|---|---|---|
+| Claude Code | transcript JSONL、生命周期 Hooks | 上游未声明版本，按 fixture 观测 |
+| Pi | session JSONL v1-v3、telemetry v1、RPC line JSON | session/telemetry 声明版本，RPC 按 fixture 观测 |
+| DeepSeek Harness | observer source JSONL、session persistence v1 | 混合：persistence 声明版本，source stream 按 fixture 观测 |
+| Codex | rollout JSONL | 上游未声明版本，按 fixture 观测 |
+| Google Antigravity | brain transcript JSONL、named Hooks | 上游未声明版本，按 fixture 观测 |
+
+这里的“已验证”表示当前仓库中的脱敏原始 fixture 能稳定映射为对应 Canonical Event fixture，并通过 Adapter 与共享生命周期测试；它不是对所有未观测上游版本的承诺。完整证据、未知记录策略和限制位于 [`runtimes/compatibility.json`](runtimes/compatibility.json)，执行 `npm run compatibility:check` 可独立验证。该检查也包含在 `npm run check` 和 CI 中。
 
 ## 工作方式
 
@@ -334,6 +347,7 @@ token 可以通过插件的 `config.token` 提供，也可以从 `ORCHETRACE_TOK
 ```bash
 npm run runtime:generate
 npm run runtime:check
+npm run compatibility:check
 ```
 
 生成器会同步 TypeScript、Web 和 Rust Registry；生成文件带有 `@generated` 标记，不应直接编辑。终端 `orche` 会从生成的 Rust Registry 启动所有可用 Observer，Web 诊断抽屉也会根据 Registry 和实际 Catalog 动态显示数据来源。
@@ -349,7 +363,7 @@ export const adapter = defineAdapter({
 });
 ```
 
-Observer 暴露 `start()`、`scanOnce()` 和 `stop()`；Canonical Event 必须保证 `event_id` 唯一、同一 `source_id` 的 `source_seq` 单调递增，并在 Rust ACK 后再持久化读取游标。`packages/synthetic-adapter` 是不修改 Rust Runtime 枚举即可接入和生成子 Agent/工具事件的最小示例，兼容性测试位于 `packages/adapter-runtime/test`。
+Observer 暴露 `start()`、`scanOnce()` 和 `stop()`；Canonical Event 必须保证 `event_id` 唯一、同一 `source_id` 的 `source_seq` 单调递增，并在 Rust ACK 后再持久化读取游标。`packages/synthetic-adapter` 是不修改 Rust Runtime 枚举即可接入和生成子 Agent/工具事件的最小示例，兼容性测试位于 `packages/adapter-runtime/test`。新增或修改内置 Adapter 时，还必须同步 `runtimes/compatibility.json`，提供 raw fixture、canonical fixture 与测试三类证据。
 
 ## 桌面开发
 

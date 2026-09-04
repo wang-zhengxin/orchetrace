@@ -28,6 +28,7 @@ npm run desktop:check
 - Do not infer a child Agent, success or failure without explicit runtime evidence.
 - Preserve stable event IDs and ACK-gated cursor updates.
 - Add a synthetic, irreversibly redacted fixture for new runtime behavior.
+- Update `runtimes/compatibility.json` with raw, canonical and test evidence for every built-in runtime format.
 - Add both mapping tests and fold/projection tests when changing Canonical Event semantics.
 - Treat unknown required source events as diagnostics or errors, never silent data loss.
 
