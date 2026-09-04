@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   cliArchiveName,
   distributionTarget,
+  executableInvocation,
   normalizeVersion,
   npmInvocation,
   npmTarballName,
@@ -41,6 +42,26 @@ test("npm invocation bypasses Windows cmd shim resolution", () => {
     execPath: "/usr/bin/node",
     environment: {},
   }), { command: "npm", args: ["pack"] });
+});
+
+test("Windows npm command shims retain quoted paths", () => {
+  assert.deepEqual(executableInvocation(
+    "C:\\Users\\Runner Admin\\prefix\\orche.cmd",
+    ["--help"],
+    { platform: "win32", comSpec: "C:\\Windows\\System32\\cmd.exe" },
+  ), {
+    command: "C:\\Windows\\System32\\cmd.exe",
+    args: [
+      "/d",
+      "/s",
+      "/c",
+      'call "C:\\Users\\Runner Admin\\prefix\\orche.cmd" "--help"',
+    ],
+  });
+  assert.deepEqual(executableInvocation("/tmp/orche", ["--help"], { platform: "linux" }), {
+    command: "/tmp/orche",
+    args: ["--help"],
+  });
 });
 
 test("Homebrew definitions pin immutable release assets and runtime paths", () => {

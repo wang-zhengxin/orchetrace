@@ -82,6 +82,25 @@ export function npmInvocation(commandArgs, {
     : { command: "npm", args: commandArgs };
 }
 
+export function executableInvocation(command, commandArgs, {
+  platform = process.platform,
+  comSpec = process.env.ComSpec ?? "cmd.exe",
+} = {}) {
+  if (platform !== "win32" || !command.toLowerCase().endsWith(".cmd")) {
+    return { command, args: commandArgs };
+  }
+
+  // `cmd /s /c` strips the first and last quote when the command itself starts
+  // with a quoted path. Prefixing the batch launcher with `call` keeps paths
+  // containing spaces intact and also propagates the launcher's exit code.
+  const commandLine = ["call", quoteCmdArgument(command), ...commandArgs.map(quoteCmdArgument)].join(" ");
+  return { command: comSpec, args: ["/d", "/s", "/c", commandLine] };
+}
+
+function quoteCmdArgument(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
 export function parseArguments(argv) {
   const result = new Map();
   for (let index = 0; index < argv.length; index += 1) {

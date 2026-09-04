@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   distributionTarget,
+  executableInvocation,
   normalizeVersion,
   npmInvocation,
   npmTarballName,
@@ -195,11 +196,8 @@ async function verifyUninstalled(prefix) {
 
 function executeShim(prefix, name, commandArgs, environment) {
   const shim = commandShim(prefix, name);
-  if (process.platform !== "win32") {
-    return execute(shim, commandArgs, { cwd: temporaryRoot, env: environment });
-  }
-  const commandLine = [`"${shim}"`, ...commandArgs].join(" ");
-  return execute(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", commandLine], {
+  const invocation = executableInvocation(shim, commandArgs);
+  return execute(invocation.command, invocation.args, {
     cwd: temporaryRoot,
     env: environment,
   });
