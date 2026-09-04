@@ -400,6 +400,8 @@ cargo tauri build --ci \
 
 标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask：Formula 必须完成安装、`orche`/`otrace` 启动和卸载，Cask 必须安装到临时 Applications、启动隔离桌面进程并卸载。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
 
+当仓库已经存在上一版非草稿 Release 时，四个平台还会自动下载包含对应架构安装器的最近版本，在同一隔离 HOME/App Data 上依次启动“上一版 → 当前候选版 → 上一版”，验证升级和回滚后数据仍被保留。首个 Release 没有可用基线时会写入明确的 first-release 结果，而不会伪造历史版本。
+
 设置仓库变量 `NPM_PUBLISH=true` 后，流水线会按“平台包优先、主包最后”的顺序发布 `@orchetrace/cli@beta`，并启用 npm provenance。设置 `HOMEBREW_PUBLISH=true` 和具备 `wang-zhengxin/homebrew-tap` 写权限的 `HOMEBREW_TAP_TOKEN` 后，会依据 Release 中不可变资产的 SHA-256 自动更新 Formula 与 Cask。未设置这些开关时仍会构建、打包和验证，避免误发布。
 
 首次启用前需要先创建 npm `@orchetrace` scope（或统一修改包命名空间）和 `wang-zhengxin/homebrew-tap` 仓库，并在 npm Trusted Publisher/GitHub Secrets 中授权本工作流；流水线不会代替维护者创建外部组织、仓库或发布凭据。
@@ -433,6 +435,11 @@ node scripts/smoke-homebrew-lifecycle.mjs \
   --version 0.1.0-beta.4 \
   --assets-dir dist/homebrew-assets \
   --definitions-dir dist/homebrew
+
+node scripts/smoke-desktop-version-lifecycle.mjs \
+  --target aarch64-apple-darwin \
+  --baseline-root dist/desktop-baseline \
+  --candidate-root dist/desktop-candidate
 ```
 
 ## 验证
@@ -547,7 +554,7 @@ otrace diagnostics --db /path/to/orchetrace.db --output diagnostics.json
 - Codex rollout 格式仍属于上游实现细节；Adapter 会忽略未知记录，但跨 Codex 大版本需要持续维护 fixture；
 - Pi catch-up 尚未直接映射 RPC `entries`；
 - 从源码单独运行 DeepSeek Harness watcher 仍依赖 `zstd` CLI；桌面安装包已通过内置 `otrace` 解压，精确的瞬时 Agent status 仍需要 Cordis Observer；
-- npm CLI 已进入四平台安装生命周期门禁，DMG/DEB/MSI 已有最终内容和隔离启动检查，Homebrew Formula/Cask 已有实体安装、启动与卸载门禁；Developer ID/Windows 正式证书、macOS notarization、自动更新以及桌面/Homebrew 跨版本升级回滚验证尚未完成；
+- npm CLI、桌面安装器与 Homebrew Formula/Cask 已进入安装和启动门禁；桌面安装器还会以最近公开 Release 为基线验证四平台升级、回滚和共享数据保留。Developer ID/Windows 正式证书、macOS notarization、自动更新以及 Homebrew 跨版本升级回滚尚未完成；
 - Orchetrace 仍是工作名称，公开发行前需要完成包名和商标检查。
 
 ## License

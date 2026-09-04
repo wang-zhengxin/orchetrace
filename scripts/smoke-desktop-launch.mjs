@@ -10,7 +10,13 @@ import { installerExtension, locateExtractedRuntime } from "./verify-desktop-art
 
 const execute = promisify(execFile);
 
-export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 }) {
+export async function smokeDesktopLaunch({
+  target,
+  bundleRoot,
+  installerPath,
+  dataRoot,
+  settleMs = 3_000,
+}) {
   const metadata = distributionTarget(target);
   if (process.platform !== metadata.os || process.arch !== metadata.cpu) {
     throw new Error(
@@ -20,9 +26,17 @@ export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 
   }
 
   const extension = installerExtension(target);
-  const installers = (await walkFiles(path.resolve(bundleRoot)))
-    .filter((file) => file.toLowerCase().endsWith(extension))
-    .sort();
+  if (!installerPath && typeof bundleRoot !== "string") {
+    throw new Error("desktop launch smoke requires --installer or --bundle-root");
+  }
+  if (installerPath && !path.resolve(installerPath).toLowerCase().endsWith(extension)) {
+    throw new Error(`desktop launch smoke expected a ${extension} installer`);
+  }
+  const installers = installerPath
+    ? [path.resolve(installerPath)]
+    : (await walkFiles(path.resolve(bundleRoot)))
+      .filter((file) => file.toLowerCase().endsWith(extension))
+      .sort();
   if (installers.length === 0) {
     throw new Error(`desktop launch smoke could not find a ${extension} installer`);
   }
@@ -41,22 +55,25 @@ export async function smokeDesktopLaunch({ target, bundleRoot, settleMs = 3_000 
       onMounted: () => { mounted = true; },
       onDetached: () => { mounted = false; },
     });
-    const isolatedHome = path.join(temporaryRoot, "home");
+    const isolatedData = dataRoot ? path.resolve(dataRoot) : temporaryRoot;
+    const isolatedHome = path.join(isolatedData, "home");
     await mkdir(isolatedHome, { recursive: true });
     const environment = {
       ...process.env,
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
-      ORCHETRACE_APP_DATA_DIR: path.join(temporaryRoot, "app-data"),
-      ORCHETRACE_DATA_DIR: path.join(temporaryRoot, "data"),
+      APPDATA: path.join(isolatedData, "windows", "roaming"),
+      LOCALAPPDATA: path.join(isolatedData, "windows", "local"),
+      ORCHETRACE_APP_DATA_DIR: path.join(isolatedData, "app-data"),
+      ORCHETRACE_DATA_DIR: path.join(isolatedData, "data"),
       ORCHETRACE_AUTOSTART: "0",
-      WEBVIEW2_USER_DATA_FOLDER: path.join(temporaryRoot, "webview2"),
+      WEBVIEW2_USER_DATA_FOLDER: path.join(isolatedData, "webview2"),
       ...(metadata.os === "linux" ? {
         NO_AT_BRIDGE: "1",
         WEBKIT_DISABLE_COMPOSITING_MODE: "1",
-        XDG_CACHE_HOME: path.join(temporaryRoot, "xdg", "cache"),
-        XDG_CONFIG_HOME: path.join(temporaryRoot, "xdg", "config"),
-        XDG_DATA_HOME: path.join(temporaryRoot, "xdg", "data"),
+        XDG_CACHE_HOME: path.join(isolatedData, "xdg", "cache"),
+        XDG_CONFIG_HOME: path.join(isolatedData, "xdg", "config"),
+        XDG_DATA_HOME: path.join(isolatedData, "xdg", "data"),
       } : {}),
     };
     const command = desktopLaunchCommand(metadata, installation.executable);
@@ -209,9 +226,14 @@ async function walkFiles(directory) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = parseArguments(process.argv.slice(2));
+  const installerPath = args.get("--installer");
+  const bundleRoot = args.get("--bundle-root");
+  const dataRoot = args.get("--data-root");
   const result = await smokeDesktopLaunch({
     target: requiredArgument(args, "--target"),
-    bundleRoot: requiredArgument(args, "--bundle-root"),
+    bundleRoot: typeof bundleRoot === "string" ? bundleRoot : undefined,
+    installerPath: typeof installerPath === "string" ? installerPath : undefined,
+    dataRoot: typeof dataRoot === "string" ? dataRoot : undefined,
   });
   console.log(
     `Verified isolated desktop launch from ${path.basename(result.installer)} for ` +

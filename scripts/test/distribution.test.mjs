@@ -95,4 +95,8 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   assert.match(release, /smoke-homebrew-lifecycle\.mjs/u);
   assert.match(release, /pattern: installer-\*-apple-darwin/u);
   assert.doesNotMatch(release, /gh release download/u);
+  assert.match(release, /desktop-version-lifecycle:/u);
+  assert.match(release, /download-desktop-baseline\.mjs/u);
+  assert.match(release, /smoke-desktop-version-lifecycle\.mjs/u);
+  assert.match(release, /needs: \[desktop, homebrew, desktop-version-lifecycle\]/u);
 });

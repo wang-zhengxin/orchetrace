@@ -177,10 +177,67 @@ jobs:
       - name: Verify Homebrew Formula and Cask installation
         run: node scripts/smoke-homebrew-lifecycle.mjs --version "${GITHUB_REF_NAME#v}" --assets-dir dist/homebrew-assets --definitions-dir dist/homebrew
 
+  desktop-version-lifecycle:
+    name: ${{ matrix.label }} version lifecycle
+    if: github.ref_type == 'tag'
+    needs: desktop
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon
+            platform: macos-15
+            target: aarch64-apple-darwin
+          - label: macOS Intel
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+          - label: Linux x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - label: Windows x64
+            platform: windows-2022
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux desktop runtime dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-0 \
+            libayatana-appindicator3-1 \
+            librsvg2-2 \
+            xauth \
+            xvfb
+
+      - name: Set up official Node.js runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Download candidate installer
+        uses: actions/download-artifact@v8
+        with:
+          name: installer-${{ matrix.target }}
+          path: dist/desktop-candidate
+
+      - name: Download latest compatible release baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/download-desktop-baseline.mjs --repository "${{ github.repository }}" --current-tag "${{ github.ref_name }}" --target "${{ matrix.target }}" --output dist/desktop-baseline
+
+      - name: Verify baseline, candidate, rollback, and shared data
+        run: node scripts/smoke-desktop-version-lifecycle.mjs --target "${{ matrix.target }}" --baseline-root dist/desktop-baseline --candidate-root dist/desktop-candidate
+
   distribution:
     name: Publish CLI, npm, and Homebrew metadata
     if: github.ref_type == 'tag'
-    needs: [desktop, homebrew]
+    needs: [desktop, homebrew, desktop-version-lifecycle]
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:

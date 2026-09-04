@@ -118,7 +118,9 @@ node scripts/smoke-install-lifecycle.mjs \
 
 Tauri 构建之后，Release job 还会在对应操作系统原生解包 DMG、DEB 或 MSI，检查桌面主程序、Node.js 22、`otrace`、五套 Adapter 和 macOS 代码签名，并输出安装器 SHA-256。随后从最终安装器启动桌面主程序，使用 `ORCHETRACE_APP_DATA_DIR`、`ORCHETRACE_DATA_DIR`、XDG 与 WebView2 临时目录隔离测试数据，设置 `ORCHETRACE_AUTOSTART=0`；Linux 通过临时 Xvfb 显示环境运行。确认桌面事件循环稳定后会回收整个进程组并删除临时安装。已验证的安装器通过 Actions artifact 传给后续任务，不依赖草稿 Release 的下载权限。
 
-标签发布还会在全新 macOS runner 上对生成的 Formula 和 Cask 执行 `brew style` 与实体生命周期：Formula 安装后验证 `orche`、`otrace`，Cask 安装到临时 Applications 后验证隔离桌面启动，两者最后都必须成功卸载。通过该门禁后才允许更新项目 Tap。桌面和 Homebrew 的跨版本升级/回滚仍属于后续发布验收。
+标签发布还会在全新 macOS runner 上对生成的 Formula 和 Cask 执行 `brew style` 与实体生命周期：Formula 安装后验证 `orche`、`otrace`，Cask 安装到临时 Applications 后验证隔离桌面启动，两者最后都必须成功卸载。通过该门禁后才允许更新项目 Tap。Homebrew 的跨版本升级/回滚仍属于后续发布验收。
+
+桌面跨版本任务会从 GitHub Releases 自动选择当前标签之前、含目标架构安装器的最新非草稿版本。四个平台分别在同一隔离 HOME/App Data 中执行“上一版 → 当前候选版 → 上一版”启动序列，并校验升级、回滚过程没有删除共享数据。首发没有历史安装器时会生成明确的跳过标记；从第二个兼容 Release 开始，该门禁是强制的。
 
 ## 快速开始
 
@@ -603,11 +605,12 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - DMG、DEB、MSI 最终内容、内置运行时、五 Adapter 与 macOS 签名门禁。
 - DMG、DEB、MSI 临时展开、隔离数据启动、进程回收与卸载无残留烟测。
 - Homebrew Formula/Cask 官方样式、实体安装、命令或桌面启动与卸载门禁。
+- 四平台最近 Release → 当前候选 → 最近 Release 的升级、回滚和共享数据保留门禁。
 
 ### Beta 前待完成
 
 - Developer ID 与 Windows 证书签名、macOS notarization；
-- 桌面与 Homebrew 跨版本升级、回滚测试；
+- Homebrew 跨版本升级、回滚测试；
 - 自动更新通道与签名密钥轮换流程；
 - 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；
 - 公开发布前的名称、包名和商标检查。
