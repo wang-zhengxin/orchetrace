@@ -20,8 +20,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-policy:
+    name: Release signing policy
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      release_channel: ${{ steps.signing.outputs.release_channel }}
+      release_prerelease: ${{ steps.signing.outputs.release_prerelease }}
+      signed_release: ${{ steps.signing.outputs.signed_release }}
+      signing_status: ${{ steps.signing.outputs.signing_status }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up official Node.js runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Resolve release context
+        env:
+          ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
+        run: node scripts/release-context.mjs
+
+      - name: Evaluate platform signing readiness
+        id: signing
+        env:
+          ORCHETRACE_SIGNED_RELEASES_ENABLED: ${{ vars.SIGNED_RELEASES_ENABLED }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: node scripts/release-signing-policy.mjs --version "$ORCHETRACE_RELEASE_VERSION" --mode "$ORCHETRACE_RELEASE_MODE" --output dist/release-policy
+
+      - name: Preserve signing policy report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-policy
+          if-no-files-found: error
+          retention-days: 14
+          path: dist/release-policy/
+
   desktop:
     name: ${{ matrix.label }}
+    needs: release-policy
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 90
     strategy:
@@ -113,18 +161,49 @@ jobs:
             dist/cli/artifacts/
             dist/npm/tarballs/
 
-      - name: Build installers and create draft release
-        if: github.ref_type == 'tag'
+      - name: Import Windows Authenticode certificate
+        if: github.ref_type == 'tag' && needs.release-policy.outputs.signed_release == 'true' && startsWith(matrix.platform, 'windows-')
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: ./scripts/import-windows-certificate.ps1
+
+      - name: Build signed installers and create draft release
+        if: github.ref_type == 'tag' && needs.release-policy.outputs.signed_release == 'true'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Orchetrace v__VERSION__"
+          releaseBody: |
+            Desktop build for Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity observability.
+
+            This draft is intentionally unpublished until installation and upgrade smoke tests pass.
+          releaseDraft: true
+          prerelease: ${{ needs.release-policy.outputs.release_prerelease }}
+          args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+      - name: Build unsigned prerelease installers and create draft release
+        if: github.ref_type == 'tag' && needs.release-policy.outputs.signed_release != 'true'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: "Orchetrace v__VERSION__ Beta"
+          tagName: ${{ github.ref_name }}
+          releaseName: "Orchetrace v__VERSION__ Beta (unsigned)"
           releaseBody: |
-            Beta desktop build for Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity observability.
+            Unsigned beta desktop build for Claude Code, Codex, Pi, DeepSeek Harness, and Google Antigravity observability.
 
             This draft is intentionally unpublished until installation and upgrade smoke tests pass.
           releaseDraft: true
@@ -141,7 +220,7 @@ jobs:
           args: --ci --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
 
       - name: Verify final desktop installer contents
-        run: node scripts/verify-desktop-artifact.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
+        run: node scripts/verify-desktop-artifact.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle ${{ needs.release-policy.outputs.signed_release == 'true' && '--require-trusted-signature' || '' }}
 
       - name: Verify isolated desktop launch
         run: node scripts/smoke-desktop-launch.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
@@ -266,7 +345,7 @@ jobs:
 
   distribution:
     name: Assemble release candidate
-    needs: [desktop, homebrew, desktop-version-lifecycle]
+    needs: [release-policy, desktop, homebrew, desktop-version-lifecycle]
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -284,6 +363,12 @@ jobs:
         env:
           ORCHETRACE_PREVIEW_VERSION: ${{ inputs.version }}
         run: node scripts/release-context.mjs
+
+      - name: Download signing policy report
+        uses: actions/download-artifact@v8
+        with:
+          name: release-policy
+          path: dist/release-policy
 
       - name: Download CLI and npm artifacts
         uses: actions/download-artifact@v8
@@ -313,7 +398,7 @@ jobs:
         run: node scripts/stage-npm-packages.mjs --version "$ORCHETRACE_RELEASE_VERSION" --output dist/npm-main
 
       - name: Generate validated candidate summary
-        run: node scripts/summarize-release-candidate.mjs --version "$ORCHETRACE_RELEASE_VERSION" --mode "$ORCHETRACE_RELEASE_MODE" --assets-dir dist --output dist/release-summary
+        run: node scripts/summarize-release-candidate.mjs --version "$ORCHETRACE_RELEASE_VERSION" --mode "$ORCHETRACE_RELEASE_MODE" --assets-dir dist --output dist/release-summary --signing-policy dist/release-policy/release-signing-policy.json
 
       - name: Preserve complete release candidate
         uses: actions/upload-artifact@v7
@@ -323,6 +408,7 @@ jobs:
           retention-days: 14
           path: |
             dist/release-summary/
+            dist/release-policy/
             dist/distribution/
             dist/homebrew/
             dist/npm-main/tarballs/

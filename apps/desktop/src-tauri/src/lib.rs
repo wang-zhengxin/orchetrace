@@ -589,6 +589,25 @@ fn packaged_executable(resource_dir: &Path, name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
+fn packaged_resource_dir(executable: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let candidate = executable
+        .parent()
+        .and_then(Path::parent)
+        .map(|contents| contents.join("Resources"));
+    #[cfg(target_os = "windows")]
+    let candidate = executable.parent().map(Path::to_path_buf);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidate: Option<PathBuf> = None;
+    candidate.filter(|path| path.is_dir())
+}
+
+fn executable_resource_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|executable| packaged_resource_dir(&executable))
+}
+
 fn resolve_cli_path(resource_dir: &Path) -> PathBuf {
     if let Some(configured) = env::var_os("ORCHETRACE_CLI_PATH") {
         return PathBuf::from(configured);
@@ -707,7 +726,13 @@ pub fn run() {
                 Some(path) => PathBuf::from(path),
                 None => app.path().app_data_dir()?,
             };
-            let resource_dir = app.path().resource_dir()?;
+            let resource_dir = match env::var_os("ORCHETRACE_RESOURCE_DIR") {
+                Some(path) => PathBuf::from(path),
+                None => match app.path().resource_dir() {
+                    Ok(path) => path,
+                    Err(error) => executable_resource_dir().ok_or(error)?,
+                },
+            };
             let configured_data_dir = env::var_os("ORCHETRACE_DATA_DIR").map(PathBuf::from);
             let data_dir = configured_data_dir.unwrap_or_else(|| app_data_dir.join("data"));
             let legacy_snapshot = env::var_os("ORCHETRACE_SNAPSHOT")
@@ -832,8 +857,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnose_storage, next_export_path, packaged_executable, read_json, resolve_adapter_entry,
-        run_export, run_file, run_repair,
+        diagnose_storage, next_export_path, packaged_executable, packaged_resource_dir, read_json,
+        resolve_adapter_entry, run_export, run_file, run_repair,
     };
     use orchetrace_storage::EventStore;
     use serde_json::json;
@@ -976,6 +1001,40 @@ mod tests {
             resolve_adapter_entry(&directory, "example-adapter", "src/auto-cli.ts"),
             adapter
         );
+
+        fs::remove_dir_all(directory).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn packaged_resource_directory_can_be_recovered_from_the_executable() {
+        let directory = temp_dir();
+        #[cfg(target_os = "macos")]
+        let (executable, resources) = {
+            let contents = directory.join("Orchetrace.app/Contents");
+            let executable = contents.join("MacOS/orchetrace-desktop");
+            let resources = contents.join("Resources");
+            (executable, resources)
+        };
+        #[cfg(target_os = "windows")]
+        let (executable, resources) = {
+            let resources = directory.join("Orchetrace");
+            (resources.join("orchetrace-desktop.exe"), resources)
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let (executable, resources) = (directory.join("orchetrace-desktop"), directory.clone());
+        fs::create_dir_all(
+            executable
+                .parent()
+                .expect("executable should have a parent"),
+        )
+        .expect("executable directory should be created");
+        fs::create_dir_all(&resources).expect("resources directory should be created");
+        fs::write(&executable, b"desktop").expect("executable should be written");
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        assert_eq!(packaged_resource_dir(&executable), Some(resources));
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(packaged_resource_dir(&executable), None);
 
         fs::remove_dir_all(directory).expect("temp directory should be removed");
     }

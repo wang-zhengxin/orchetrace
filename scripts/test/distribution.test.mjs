@@ -7,6 +7,7 @@ import {
   cliArchiveName,
   distributionTarget,
   normalizeVersion,
+  npmInvocation,
   npmTarballName,
   renderHomebrewCask,
   renderHomebrewFormula,
@@ -24,6 +25,22 @@ test("release versions and target package names stay deterministic", () => {
     cliArchiveName("0.1.0-beta.4", "x86_64-unknown-linux-gnu"),
     "orchetrace-cli-v0.1.0-beta.4-x86_64-unknown-linux-gnu.tar.gz",
   );
+});
+
+test("npm invocation bypasses Windows cmd shim resolution", () => {
+  assert.deepEqual(npmInvocation(["pack", "package"], {
+    platform: "win32",
+    execPath: "C:\\node\\node.exe",
+    environment: {},
+  }), {
+    command: "C:\\node\\node.exe",
+    args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "pack", "package"],
+  });
+  assert.deepEqual(npmInvocation(["pack"], {
+    platform: "linux",
+    execPath: "/usr/bin/node",
+    environment: {},
+  }), { command: "npm", args: ["pack"] });
 });
 
 test("Homebrew definitions pin immutable release assets and runtime paths", () => {
@@ -99,10 +116,15 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
   assert.match(release, /desktop-version-lifecycle:/u);
   assert.match(release, /download-desktop-baseline\.mjs/u);
   assert.match(release, /smoke-desktop-version-lifecycle\.mjs/u);
-  assert.match(release, /needs: \[desktop, homebrew, desktop-version-lifecycle\]/u);
+  assert.match(release, /needs: \[release-policy, desktop, homebrew, desktop-version-lifecycle\]/u);
   assert.match(release, /Build preview installers without creating a release/u);
   assert.match(release, /ORCHETRACE_PREVIEW_VERSION: \$\{\{ inputs\.version \}\}/u);
   assert.match(release, /release-context\.mjs/u);
+  assert.match(release, /release-signing-policy\.mjs/u);
+  assert.match(release, /SIGNED_RELEASES_ENABLED/u);
+  assert.match(release, /import-windows-certificate\.ps1/u);
+  assert.match(release, /--require-trusted-signature/u);
+  assert.match(release, /--signing-policy dist\/release-policy\/release-signing-policy\.json/u);
   assert.match(release, /summarize-release-candidate\.mjs/u);
   assert.match(release, /name: release-candidate-\$\{\{ github\.run_id \}\}/u);
   assert.match(release, /if: github\.ref_type == 'tag' && vars\.NPM_PUBLISH == 'true'/u);

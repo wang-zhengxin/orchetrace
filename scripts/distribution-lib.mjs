@@ -68,6 +68,20 @@ export function npmTarballName(packageName, version) {
   return `${npmDirectoryName(packageName)}-${normalizeVersion(version)}.tgz`;
 }
 
+export function npmInvocation(commandArgs, {
+  platform = process.platform,
+  execPath = process.execPath,
+  environment = process.env,
+} = {}) {
+  const platformPath = platform === "win32" ? path.win32 : path;
+  const npmCli = environment.npm_execpath || (platform === "win32"
+    ? platformPath.join(platformPath.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : undefined);
+  return npmCli
+    ? { command: execPath, args: [npmCli, ...commandArgs] }
+    : { command: "npm", args: commandArgs };
+}
+
 export function parseArguments(argv) {
   const result = new Map();
   for (let index = 0; index < argv.length; index += 1) {

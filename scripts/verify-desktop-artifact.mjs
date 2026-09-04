@@ -50,7 +50,7 @@ export function locateExtractedRuntime(files, target) {
   return { desktop, node, otrace, adapters };
 }
 
-export async function verifyDesktopArtifact({ target, bundleRoot }) {
+export async function verifyDesktopArtifact({ target, bundleRoot, requireTrustedSignature = false }) {
   const metadata = distributionTarget(target);
   if (metadata.os !== process.platform || metadata.cpu !== process.arch) {
     throw new Error(
@@ -106,6 +106,17 @@ export async function verifyDesktopArtifact({ target, bundleRoot }) {
         "--strict",
         path.dirname(path.dirname(appInfo)),
       ]);
+      if (requireTrustedSignature) {
+        const appPath = path.dirname(path.dirname(appInfo));
+        const { stderr: signatureDetails } = await execute("codesign", ["-dv", "--verbose=4", appPath]);
+        if (!/^Authority=Developer ID Application:/mu.test(signatureDetails)) {
+          throw new Error("macOS application is not signed with a Developer ID Application identity");
+        }
+        await execute("xcrun", ["stapler", "validate", appPath]);
+        await execute("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+      }
+    } else if (metadata.os === "win32" && requireTrustedSignature) {
+      await verifyWindowsAuthenticode([installer, runtime.desktop]);
     }
 
     const { stdout: nodeVersionOutput } = await execute(runtime.node, ["--version"]);
@@ -138,6 +149,18 @@ export async function verifyDesktopArtifact({ target, bundleRoot }) {
   }
 }
 
+async function verifyWindowsAuthenticode(files) {
+  const environment = { ...process.env };
+  files.forEach((file, index) => {
+    environment[`ORCHETRACE_SIGN_TARGET_${index}`] = file;
+  });
+  const command = files.map((_, index) =>
+    `$signature = Get-AuthenticodeSignature -FilePath $env:ORCHETRACE_SIGN_TARGET_${index}; ` +
+    `if ($signature.Status -ne 'Valid') { throw \"invalid Authenticode signature: $($signature.Status)\" }`,
+  ).join("; ");
+  await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { env: environment });
+}
+
 async function walkFiles(directory) {
   const files = [];
   const pending = [directory];
@@ -158,6 +181,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const result = await verifyDesktopArtifact({
     target: requiredArgument(args, "--target"),
     bundleRoot: requiredArgument(args, "--bundle-root"),
+    requireTrustedSignature: args.has("--require-trusted-signature"),
   });
   console.log(
     `Verified desktop installer ${result.installer}: ${result.bytes} bytes, ` +

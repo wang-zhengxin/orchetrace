@@ -7,7 +7,7 @@ import { normalizeVersion, parseArguments, requiredArgument } from "./distributi
 
 const artifactExtensions = [".dmg", ".deb", ".msi", ".tar.gz", ".tgz"];
 
-export async function summarizeReleaseCandidate({ version, mode, assetsDir, output }) {
+export async function summarizeReleaseCandidate({ version, mode, assetsDir, output, signingPolicy }) {
   const releaseVersion = normalizeVersion(version);
   if (!new Set(["preview", "release"]).has(mode)) throw new Error(`invalid release mode ${mode}`);
   const root = path.resolve(assetsDir);
@@ -24,11 +24,20 @@ export async function summarizeReleaseCandidate({ version, mode, assetsDir, outp
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   }
+  const signing = signingPolicy ? JSON.parse(await readFile(path.resolve(signingPolicy), "utf8")) : undefined;
+  if (signing && (signing.version !== releaseVersion || signing.mode !== mode)) {
+    throw new Error("release signing policy does not match candidate context");
+  }
   const summary = {
     schemaVersion: 1,
     mode,
     version: releaseVersion,
     generatedAt: new Date().toISOString(),
+    ...(signing ? { signing: {
+      channel: signing.channel,
+      status: signing.status,
+      signedRelease: signing.signedRelease,
+    } } : {}),
     artifacts,
   };
   const outputRoot = path.resolve(output);
@@ -46,7 +55,11 @@ export async function summarizeReleaseCandidate({ version, mode, assetsDir, outp
 export function renderMarkdown(summary) {
   const rows = summary.artifacts.map((artifact) =>
     `| \`${artifact.path}\` | ${artifact.bytes} | \`${artifact.sha256}\` |`).join("\n");
+  const signing = summary.signing
+    ? `Signing: \`${summary.signing.status}\` (${summary.signing.channel})\n\n`
+    : "";
   return `## Orchetrace ${summary.mode} ${summary.version}\n\n` +
+    signing +
     `Validated artifacts: ${summary.artifacts.length}\n\n` +
     "| Artifact | Bytes | SHA-256 |\n| --- | ---: | --- |\n" +
     `${rows}\n`;
@@ -73,6 +86,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     mode: requiredArgument(args, "--mode"),
     assetsDir: requiredArgument(args, "--assets-dir"),
     output: requiredArgument(args, "--output"),
+    signingPolicy: args.get("--signing-policy"),
   });
   if (process.env.GITHUB_STEP_SUMMARY) {
     await appendFile(process.env.GITHUB_STEP_SUMMARY, result.markdown);

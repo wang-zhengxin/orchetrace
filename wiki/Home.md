@@ -117,6 +117,8 @@ gh workflow run release.yml -f version=0.1.0-beta.4
 
 Preview 与标签发布共享四平台构建、安装器内容/启动、历史版本回滚和 Homebrew 生命周期门禁，但不创建 Git 标签、GitHub Release，不发布 npm，也不修改 Tap。完成后产生保留 14 天的 `release-candidate-<run-id>` artifact，其中包含安装器、CLI/npm 包、Formula/Cask，以及机器可读 JSON 和 Markdown SHA-256 摘要。只有 `v*` 标签触发才允许进入外部发布步骤。
 
+流水线在构建前把版本归类为 Preview、预发行或稳定版，并生成不含密钥的签名策略报告。Preview 固定不签名；预发行标签默认允许明确标记的 unsigned 草稿；稳定版必须启用 `SIGNED_RELEASES_ENABLED`，同时具备 Apple Developer ID/Apple ID notarization 和 Windows PFX 凭据。签名构建完成后还会反向验证 Developer ID、公证票据、Gatekeeper 和 Authenticode，避免“配置了证书但最终产物未签名”的假阳性。
+
 四平台 Release job 会在隔离前缀真实执行 npm CLI 的完整生命周期：安装基线版本、升级候选版本、回滚基线版本、卸载，并逐阶段检查 npm 命令 shim、主包/平台包版本、`orche --help` 和 `otrace`。本机已有 CLI 不会被覆盖。源码构建完 CLI bundle 后可手工运行：
 
 ```bash
@@ -619,10 +621,11 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - Homebrew Formula/Cask 官方样式、实体安装、升级、回滚、命令或桌面启动与卸载门禁。
 - 四平台最近 Release → 当前候选 → 最近 Release 的升级、回滚和共享数据保留门禁。
 - 不创建 Release、不发布外部包的四平台 Release Preview 与候选产物 SHA-256 汇总。
+- Release Preview、预发行和稳定版的分级签名策略报告；稳定版缺少 Apple Developer ID/notarization 或 Windows Authenticode 配置时会在构建前阻断。
 
 ### Beta 前待完成
 
-- Developer ID 与 Windows 证书签名、macOS notarization；
+- 配置真实 Developer ID、Apple notarization 与 Windows Authenticode 凭据，并完成一次受保护环境的签名发布验证；
 - 首个 CLI 归档发布后的 Formula 历史二进制升级、回滚测试；
 - 自动更新通道与签名密钥轮换流程；
 - 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；

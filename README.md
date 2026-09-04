@@ -396,7 +396,7 @@ cargo tauri build --ci \
 
 安装包输出到仓库根目录的 `target/<target>/release/bundle/`。macOS 无开发者证书时可以设置 `APPLE_SIGNING_IDENTITY=-` 生成 ad-hoc 签名的测试包，但公开发行仍应使用 Developer ID 并完成 notarization。
 
-`Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。Tauri 打包完成后还会原生解包 DMG、DEB 或 MSI，验证最终安装器内的桌面主程序、签名、Node.js 22、`otrace` 和五套 Adapter；随后在隔离 HOME 与数据目录、禁用自动 Ingest 的条件下启动最终桌面程序，Linux 使用临时 Xvfb 显示环境。已验证的安装器会作为 Actions artifact 交给后续任务。推送 `v*` 标签时还会创建一个 `prerelease + draft` GitHub Release。
+`Desktop Release` Action 会在 macOS Apple Silicon、macOS Intel、Linux x64 和 Windows x64 上并行构建。每个平台还会生成可搬迁 CLI archive 和 npm 原生包，并在隔离目录真实执行“安装基线版 → 升级候选版 → 回滚基线版 → 卸载”，同时验证 npm shim、`orche`、`otrace` 与五套 Adapter 能脱离源码目录加载。Tauri 打包完成后还会原生解包 DMG、DEB 或 MSI，验证最终安装器内的桌面主程序、签名、Node.js 22、`otrace` 和五套 Adapter；随后在隔离 HOME 与数据目录、禁用自动 Ingest 的条件下启动最终桌面程序，Linux 使用临时 Xvfb 显示环境。已验证的安装器会作为 Actions artifact 交给后续任务。推送 `v*` 标签时会创建 draft GitHub Release，是否为 prerelease 由语义版本自动判定。
 
 手动运行属于安全的 Release Preview：必须传入候选语义版本，完整执行四平台构建、安装器启动、历史版本回滚和 Homebrew 生命周期，但不创建 Git 标签或 GitHub Release，也不会发布 npm 或修改 Homebrew Tap。最终会生成 `release-candidate-<run-id>` Actions artifact，包含全部安装器、CLI/npm 包、Formula/Cask，以及逐文件大小和 SHA-256 摘要，保留 14 天：
 
@@ -405,6 +405,13 @@ gh workflow run release.yml -f version=0.1.0-beta.4
 ```
 
 只有 `v*` 标签触发才会创建草稿 Release；npm 与 Tap 还分别需要显式仓库变量开关。
+
+发布开始前会生成不含密钥的 `release-signing-policy` 报告。手动 Preview 固定使用未签名/Ad-hoc 包；带预发行后缀的标签在未配置证书时仍可生成明确标记为 unsigned 的 Beta 草稿；稳定版标签则必须设置仓库变量 `SIGNED_RELEASES_ENABLED=true`，并配置以下 GitHub Actions Secrets，否则会在四平台构建开始前失败：
+
+- macOS Developer ID 与 Apple ID notarization：`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`；
+- Windows Authenticode：`WINDOWS_CERTIFICATE`（PFX 的 Base64 内容）和 `WINDOWS_CERTIFICATE_PASSWORD`。
+
+签名发布时，macOS 凭据只注入 Tauri 构建步骤，并在打包后验证 Developer ID Authority、公证票据 stapling 与 Gatekeeper；Windows PFX 只写入 runner 临时目录，导入当前用户证书库后立即删除文件，并将实际 thumbprint 写入 runner 的临时发布配置，打包后再验证 MSI 和主程序的 Authenticode。候选摘要会记录 `signed`、`unsigned-allowed` 或 `blocked`，但不会持久化任何凭据值。
 
 标签发布还会在全新的 macOS runner 上生成并执行 Homebrew Formula/Cask。Formula 使用同一候选 CLI 归档的基线版本定义验证安装、`brew upgrade`、回滚重装、`orche`/`otrace` 启动和卸载；Cask 使用最近公开 Release 的真实 DMG 完成上一版安装、候选升级、上一版回滚、隔离桌面启动与共享数据保留。Homebrew 元数据只有通过实体生命周期门禁后才会进入 Tap 发布任务。任何阶段失败都会阻止对应发布任务。
 

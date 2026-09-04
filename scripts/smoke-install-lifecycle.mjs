@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   distributionTarget,
   normalizeVersion,
+  npmInvocation,
   npmTarballName,
   parseArguments,
   requiredArgument,
@@ -208,15 +209,6 @@ function commandShim(prefix, name) {
   return process.platform === "win32"
     ? path.join(prefix, `${name}.cmd`)
     : path.join(prefix, "bin", name);
-}
-
-function npmInvocation(commandArgs) {
-  const npmCli = process.env.npm_execpath || (process.platform === "win32"
-    ? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
-    : undefined);
-  return npmCli
-    ? { command: process.execPath, args: [npmCli, ...commandArgs] }
-    : { command: "npm", args: commandArgs };
 }
 
 async function readJson(file) {

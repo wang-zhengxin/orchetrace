@@ -9,6 +9,7 @@ import {
   distributionTarget,
   executableName,
   normalizeVersion,
+  npmInvocation,
   npmDirectoryName,
   parseArguments,
   requiredArgument,
@@ -117,7 +118,8 @@ async function stagePlatformPackage(targetName, bundle) {
 
 async function pack(directory) {
   await mkdir(tarballRoot, { recursive: true });
-  await run("npm", ["pack", directory, "--pack-destination", tarballRoot, "--json"], root, {
+  const npm = npmInvocation(["pack", directory, "--pack-destination", tarballRoot, "--json"]);
+  await run(npm.command, npm.args, root, {
     ...process.env,
     npm_config_cache: process.env.npm_config_cache ?? path.join(outputRoot, ".npm-cache"),
   });
