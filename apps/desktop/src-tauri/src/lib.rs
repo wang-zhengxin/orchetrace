@@ -589,14 +589,14 @@ fn packaged_executable(resource_dir: &Path, name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-fn packaged_resource_dir(executable: &Path) -> Option<PathBuf> {
+fn packaged_resource_dir(_executable: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    let candidate = executable
+    let candidate = _executable
         .parent()
         .and_then(Path::parent)
         .map(|contents| contents.join("Resources"));
     #[cfg(target_os = "windows")]
-    let candidate = executable.parent().map(Path::to_path_buf);
+    let candidate = _executable.parent().map(Path::to_path_buf);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let candidate: Option<PathBuf> = None;
     candidate.filter(|path| path.is_dir())
