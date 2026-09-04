@@ -120,8 +120,11 @@ export async function smokeHomebrewLifecycle({ version, assetsDir, definitionsDi
     await copyFile(candidateFormula, tapFormula);
     await brew(["upgrade", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
     await verifyFormula(releaseVersion, temporaryRoot, brewEnvironment);
+    await brew(["uninstall", "--formula", "--force", "orchetrace"], brewEnvironment);
+    formulaAttempted = false;
     await copyFile(baselineFormula, tapFormula);
-    await brew(["reinstall", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
+    await brew(["install", "--formula", "--build-from-source", qualifiedToken], brewEnvironment);
+    formulaAttempted = true;
     await verifyFormula("0.0.0-lifecycle.0", temporaryRoot, brewEnvironment);
     await brew(["uninstall", "--formula", "--force", "orchetrace"], brewEnvironment);
     formulaAttempted = false;
