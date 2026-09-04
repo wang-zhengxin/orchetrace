@@ -116,7 +116,7 @@ node scripts/smoke-install-lifecycle.mjs \
   --version 0.1.0-beta.4
 ```
 
-Tauri 构建之后，Release job 还会在对应操作系统原生解包 DMG、DEB 或 MSI，检查桌面主程序、Node.js 22、`otrace`、五套 Adapter 和 macOS 代码签名，并输出安装器 SHA-256。该门禁验证最终安装器内容，但 DMG、MSI 和 Homebrew 的实体升级/回滚仍属于独立发布验收。
+Tauri 构建之后，Release job 还会在对应操作系统原生解包 DMG、DEB 或 MSI，检查桌面主程序、Node.js 22、`otrace`、五套 Adapter 和 macOS 代码签名，并输出安装器 SHA-256。macOS 进一步把 `.app` 复制到临时 Applications 目录，使用 `ORCHETRACE_APP_DATA_DIR` 与 `ORCHETRACE_DATA_DIR` 隔离测试数据、设置 `ORCHETRACE_AUTOSTART=0`，确认桌面事件循环稳定启动后再卸载。该门禁不修改用户现有安装和会话数据；桌面跨版本与 Homebrew 的实体升级/回滚仍属于独立发布验收。
 
 ## 快速开始
 
@@ -599,11 +599,12 @@ otrace repair --db /path/to/orchetrace.db --data-dir /path/to/data
 - 上游 Runtime 机器可读兼容矩阵、五 Runtime fixture 证据闭环和 CI 发布门禁。
 - macOS ARM/Intel、Linux x64、Windows x64 的 npm CLI 安装、升级、回滚和卸载门禁。
 - DMG、DEB、MSI 最终内容、内置运行时、五 Adapter 与 macOS 签名门禁。
+- macOS DMG 临时安装、隔离数据启动、进程回收与卸载无残留烟测。
 
 ### Beta 前待完成
 
 - Developer ID 与 Windows 证书签名、macOS notarization；
-- DMG、MSI 与 Homebrew 的实体安装、启动、升级、回滚和卸载测试；
+- Windows/Linux 桌面启动，以及桌面跨版本与 Homebrew 实体升级、回滚和卸载测试；
 - 自动更新通道与签名密钥轮换流程；
 - 创建并授权 npm `@orchetrace` scope 与 `wang-zhengxin/homebrew-tap`；
 - 公开发布前的名称、包名和商标检查。

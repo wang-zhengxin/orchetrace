@@ -64,4 +64,8 @@ test("CI and release jobs gate the real npm install lifecycle", async () => {
     release,
     /verify-desktop-artifact\.mjs --target \$\{\{ matrix\.target \}\}/u,
   );
+  assert.match(
+    release,
+    /smoke-desktop-launch\.mjs --target \$\{\{ matrix\.target \}\}/u,
+  );
 });

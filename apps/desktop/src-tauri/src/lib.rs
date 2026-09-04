@@ -703,7 +703,10 @@ fn desktop_web_origin() -> String {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
+            let app_data_dir = match env::var_os("ORCHETRACE_APP_DATA_DIR") {
+                Some(path) => PathBuf::from(path),
+                None => app.path().app_data_dir()?,
+            };
             let resource_dir = app.path().resource_dir()?;
             let configured_data_dir = env::var_os("ORCHETRACE_DATA_DIR").map(PathBuf::from);
             let data_dir = configured_data_dir.unwrap_or_else(|| app_data_dir.join("data"));

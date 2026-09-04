@@ -124,6 +124,10 @@ jobs:
       - name: Verify final desktop installer contents
         run: node scripts/verify-desktop-artifact.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
 
+      - name: Verify isolated macOS desktop launch
+        if: startsWith(matrix.platform, 'macos-')
+        run: node scripts/smoke-desktop-launch.mjs --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle
+
   distribution:
     name: Publish CLI, npm, and Homebrew metadata
     if: github.ref_type == 'tag'
